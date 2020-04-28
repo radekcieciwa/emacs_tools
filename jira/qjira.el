@@ -18,37 +18,39 @@
 
 (defun qjira-ticket-validation (str)
   "Take STRING an input and return jira ticket format if discovered."
-  (when (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
-    (let ((issue-number (match-string 1 str))
-          (project (match-string 2 str)))
-      ;; check if both matches are non-nil (shouldn't both be non-nil if we matched?)
-      (unless (and project issue-number)
-        (error "Project description not detected"))
+  (when-let ((string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
+             (issue-number (match-string 1 str))
+             (project (match-string 2 str)))
+    ;; check if both matches are non-nil (shouldn't both be non-nil if we matched?)
+    (unless (and project issue-number)
+      (error "Project description not detected"))
 
-      ;; check if the project is correct
-      (unless (member project qjira-project-prefixes)
-        (error "Project not not recognized"))
+    ;; check if the project is correct
+    (unless (member project qjira-project-prefixes)
+      (error "Project not not recognized"))
 
-      ;; issue-number needed, right?
-      issue-number)))
+    ;; issue-number needed, right?
+    issue-number))
 
 (defun qjira-convert-to-link-with-summary ()
   "Take current a symbol at point pointer and look up in order url, symbol (pasteboard?)."
   (interactive)
-  (when-let ((tap (thing-at-point 'symbol))
-             (ticket (qjira-ticket-validation tap)))
-    (let ((summary (thread-last (jiralib2-get-issue ticket)
-                     (alist-get 'fields)
-                     (alist-get 'summary))))
-      (message "Found ticket: %s %s" ticket summary)
+  (when-let ((bounds (bounds-of-thing-at-point 'symbol))
+             (left (car bounds))
+             (right (cdr bounds))
+             (ticket (qjira-ticket-validation (buffer-substring left right)))
+             (summary (thread-last (jiralib2-get-issue ticket)
+                        (alist-get 'fields)
+                        (alist-get 'summary))))
+    (message "Found ticket: %s %s" ticket summary)
 
-      ;; drop the original text
-      (delete-region (car (bounds-of-thing-at-point 'symbol)) (cdr (bounds-of-thing-at-point 'symbol)))
+    ;; drop the original text
+    (delete-region left right)
 
-      ;; insert a replacement text (summary + org link)
-      (let ((link (concat " [[" jiralib2-url "/browse/" ticket "][" ticket "]]"))
-            (summary (replace-regexp-in-string "\\[.*\\][ ]*" "" summary)))
-        (insert (concat summary link))))))
+    ;; insert a replacement text (summary + org link)
+    (let ((link (concat " [[" jiralib2-url "/browse/" ticket "][" ticket "]]"))
+          (summary (replace-regexp-in-string "\\[.*\\][ ]*" "" summary)))
+      (insert (concat summary link)))))
 
 
 (provide 'qjira)
