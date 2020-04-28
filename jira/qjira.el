@@ -48,9 +48,10 @@
     (delete-region left right)
 
     ;; insert a replacement text (summary + org link)
-    (let ((link (concat " [[" jiralib2-url "/browse/" ticket "][" ticket "]]"))
-          (summary (replace-regexp-in-string "\\[.*\\][ ]*" "" summary)))
-      (insert (concat summary link)))))
+    (let* ((url (format "%s/browse/%s" jiralib2-url ticket))
+           (org-link  (format "[[%s][%s]]" url ticket))
+           (summary (replace-regexp-in-string "\\[.*\\][ ]*" "" summary)))
+      (insert (format "%s %s" summary org-link)))))
 
 
 (provide 'qjira)
