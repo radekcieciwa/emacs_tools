@@ -21,9 +21,16 @@
   (when (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
     (let ((issue-number (match-string 1 str))
           (project (match-string 2 str)))
-      (if (and project issue-number)
-          (when (car (member project jira-project-prefixes)) issue-number)
-        (error "Project description not detected")))))
+      ;; check if both matches are non-nil (shouldn't both be non-nil if we matched?)
+      (unless (and project issue-number)
+        (error "Project description not detected"))
+
+      ;; check if the project is correct
+      (unless (member project jira-project-prefixes)
+        (error "Project not not recognized"))
+
+      ;; issue-number needed, right?
+      issue-number)))
 
 (defun qjira-convert-to-link-with-summary ()
   "Take current a symbol at point pointer and look up in order url, symbol (pasteboard?)."
