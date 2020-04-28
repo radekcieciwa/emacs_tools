@@ -35,13 +35,12 @@
 (defun qjira-convert-to-link-with-summary ()
   "Take current a symbol at point pointer and look up in order url, symbol (pasteboard?)."
   (interactive)
-  (when (thing-at-point 'symbol)
-    (let ((ticket (qjira-ticket-validation (thing-at-point 'symbol))))
-      (when ticket
-        (let ((summary (alist-get 'summary (alist-get 'fields (jiralib2-get-issue ticket)))))
-          (message "Found ticket: %s %s" ticket summary)
-          (delete-region (car (bounds-of-thing-at-point 'symbol)) (cdr (bounds-of-thing-at-point 'symbol)))
-          (insert (concat (replace-regexp-in-string "\\[.*\\][ ]*" "" summary) " [[" jiralib2-url "/browse/" ticket "][" ticket "]]")))))))
+  (when-let ((tap (thing-at-point 'symbol))
+             (ticket (qjira-ticket-validation tap)))
+    (let ((summary (alist-get 'summary (alist-get 'fields (jiralib2-get-issue ticket)))))
+      (message "Found ticket: %s %s" ticket summary)
+      (delete-region (car (bounds-of-thing-at-point 'symbol)) (cdr (bounds-of-thing-at-point 'symbol)))
+      (insert (concat (replace-regexp-in-string "\\[.*\\][ ]*" "" summary) " [[" jiralib2-url "/browse/" ticket "][" ticket "]]")))))
 
 
 (provide 'qjira)
