@@ -41,8 +41,14 @@
                      (alist-get 'fields)
                      (alist-get 'summary))))
       (message "Found ticket: %s %s" ticket summary)
+
+      ;; drop the original text
       (delete-region (car (bounds-of-thing-at-point 'symbol)) (cdr (bounds-of-thing-at-point 'symbol)))
-      (insert (concat (replace-regexp-in-string "\\[.*\\][ ]*" "" summary) " [[" jiralib2-url "/browse/" ticket "][" ticket "]]")))))
+
+      ;; insert a replacement text (summary + org link)
+      (let ((link (concat " [[" jiralib2-url "/browse/" ticket "][" ticket "]]"))
+            (summary (replace-regexp-in-string "\\[.*\\][ ]*" "" summary)))
+        (insert (concat summary link))))))
 
 
 (provide 'qjira)
