@@ -11,11 +11,11 @@
   "QJira customization group."
   :group 'applications)
 
-(defun jira-ticket-validation (string)
+(defun jira-ticket-validation (str)
   "Take STRING an input and return jira ticket format if discovered."
-  (when (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" string)
-    (let ((issue-number (match-string 1 string))
-          (project (match-string 2 string)))
+  (when (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
+    (let ((issue-number (match-string 1 str))
+          (project (match-string 2 str)))
       (if (and project issue-number)
           (when (car (member project '("IOS" "MAPI" "AND"))) issue-number)
         (message "Project description not detected")))))
