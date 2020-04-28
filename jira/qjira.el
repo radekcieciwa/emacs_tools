@@ -5,6 +5,8 @@
 
 ;;; Code:
 
+(require 'jiralib2)
+
 (defgroup qjira nil
   "QJira customization group."
   :group 'applications)
