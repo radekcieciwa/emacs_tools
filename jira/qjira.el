@@ -11,13 +11,18 @@
   "QJira customization group."
   :group 'applications)
 
+(defcustom qjira-project-prefixes '("IOS" "MAPI" "AND")
+  "A list of project prefixes recognized by QJira"
+  :group 'qjira
+  :type '(repeat string))
+
 (defun jira-ticket-validation (str)
   "Take STRING an input and return jira ticket format if discovered."
   (when (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
     (let ((issue-number (match-string 1 str))
           (project (match-string 2 str)))
       (if (and project issue-number)
-          (when (car (member project '("IOS" "MAPI" "AND"))) issue-number)
+          (when (car (member project jira-project-prefixes)) issue-number)
         (message "Project description not detected")))))
 
 
