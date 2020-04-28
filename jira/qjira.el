@@ -23,8 +23,7 @@
           (project (match-string 2 str)))
       (if (and project issue-number)
           (when (car (member project jira-project-prefixes)) issue-number)
-        (message "Project description not detected")))))
-
+        (error "Project description not detected")))))
 
 (defun qjira-convert-to-link-with-summary ()
   "Take current a symbol at point pointer and look up in order url, symbol (pasteboard?)."
