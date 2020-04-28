@@ -26,7 +26,7 @@
         (error "Project description not detected"))
 
       ;; check if the project is correct
-      (unless (member project jira-project-prefixes)
+      (unless (member project qjira-project-prefixes)
         (error "Project not not recognized"))
 
       ;; issue-number needed, right?
