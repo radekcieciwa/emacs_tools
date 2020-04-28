@@ -1,4 +1,4 @@
-;;; qjira.el --- A set of utilities for working with Magiclab Jira instance
+;;; qjira.el --- A set of utilities for working with Magiclab Jira instance -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;;
