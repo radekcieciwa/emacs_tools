@@ -16,7 +16,7 @@
   :group 'qjira
   :type '(repeat string))
 
-(defun jira-ticket-validation (str)
+(defun qjira-ticket-validation (str)
   "Take STRING an input and return jira ticket format if discovered."
   (when (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
     (let ((issue-number (match-string 1 str))
@@ -26,11 +26,11 @@
         (message "Project description not detected")))))
 
 
-(defun jira-convert-to-link-with-sumary ()
+(defun qjira-convert-to-link-with-summary ()
   "Take current a symbol at point pointer and look up in order url, symbol (pasteboard?)."
   (interactive)
   (when (thing-at-point 'symbol)
-    (let ((ticket (jira-ticket-validation (thing-at-point 'symbol))))
+    (let ((ticket (qjira-ticket-validation (thing-at-point 'symbol))))
       (when ticket
         (let ((summary (alist-get 'summary (alist-get 'fields (jiralib2-get-issue ticket)))))
           (message "Found ticket: %s %s" ticket summary)
