@@ -1,39 +1,58 @@
+;;; qjira.el --- A set of utilities for working with Magiclab Jira instance -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;;
+
+;;; Code:
+
+(require 'jiralib2)
 
 (defgroup qjira nil
   "QJira customization group."
   :group 'applications)
 
-(defun jira-ticket-validation (string)
-	"Takes an input and returns jira ticket format if discovered"
-  (if (string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" string)
-      (let (
-	    (issue-number (match-string 1 string))
-	    (project (match-string 2 string))
-	    )
-	(if (and project issue-number)
-	    (if (car (member project '("IOS" "MAPI" "AND")))
-		issue-number
-	        )
-	    (message "Project description not detected")
-	  )
-	)
-    )
-  )
+(defcustom qjira-project-prefixes '("IOS" "MAPI" "AND")
+  "A list of project prefixes recognized by QJira"
+  :group 'qjira
+  :type '(repeat string))
 
-(defun jira-convert-to-link-with-sumary ()
-	"Takes current pointer and looks up in order url, symbol (pasteboard?)"
+(defun qjira-ticket-validation (str)
+  "Take STRING an input and return jira ticket format if discovered."
+  (when-let ((string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
+             (issue-number (match-string 1 str))
+             (project (match-string 2 str)))
+    ;; check if both matches are non-nil (shouldn't both be non-nil if we matched?)
+    (unless (and project issue-number)
+      (error "Project description not detected"))
+
+    ;; check if the project is correct
+    (unless (member project qjira-project-prefixes)
+      (error "Project not not recognized"))
+
+    ;; issue-number needed, right?
+    issue-number))
+
+(defun qjira-convert-to-link-with-summary ()
+  "Take current a symbol at point pointer and look up in order url, symbol (pasteboard?)."
   (interactive)
-  (if (thing-at-point 'symbol)
-      (let ((ticket (jira-ticket-validation (thing-at-point 'symbol))))
-	(if ticket
-	    (let ((summary (alist-get 'summary (alist-get 'fields (jiralib2-get-issue ticket)))))
-	      (message "Found ticket: %s %s" ticket summary)
-	     (delete-region (car (bounds-of-thing-at-point 'symbol)) (cdr (bounds-of-thing-at-point 'symbol)))
-	     (insert (concat (replace-regexp-in-string "\\[.*\\][ ]*" "" summary) " [[" jiralib2-url "/browse/" ticket "][" ticket "]]"))
-	     )
-	  )
-	)
-      )
-  )
+  (when-let ((bounds (bounds-of-thing-at-point 'symbol))
+             (left (car bounds))
+             (right (cdr bounds))
+             (ticket (qjira-ticket-validation (buffer-substring left right)))
+             (summary (thread-last (jiralib2-get-issue ticket)
+                        (alist-get 'fields)
+                        (alist-get 'summary))))
+    (message "Found ticket: %s %s" ticket summary)
+
+    ;; drop the original text
+    (delete-region left right)
+
+    ;; insert a replacement text (summary + org link)
+    (let* ((url (format "%s/browse/%s" jiralib2-url ticket))
+           (org-link  (format "[[%s][%s]]" url ticket))
+           (summary (replace-regexp-in-string "\\[.*\\][ ]*" "" summary)))
+      (insert (format "%s %s" summary org-link)))))
+
 
 (provide 'qjira)
+;;; qjira.el ends here
