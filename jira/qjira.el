@@ -18,7 +18,7 @@
 
 (defun qjira-ticket-validation (str)
   "Take STRING an input and return jira ticket format if discovered."
-  (when-let ((string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str)
+  (when-let (((string-match "\\(\\([a-zA-Z]*\\)-[0-9]*\\)" str))
              (issue-number (match-string 1 str))
              (project (match-string 2 str)))
     ;; check if both matches are non-nil (shouldn't both be non-nil if we matched?)
