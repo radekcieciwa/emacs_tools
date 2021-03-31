@@ -41,7 +41,11 @@
 (defvar recognized-domains '(
     ("https://docs.google.com/*" "Google Doc")
     ("https://www.youtube.com/*" "YouTube")
-    ("https://stackoverflow.com/*" "StackOverflow")
+    ("https://bumble.slack.com/*" "Slack")
+    ("https://vpn-eu1.staffpass.com/gelato/*" "Gelato")
+    ("https://github.com/*" "GitHub")
+    ("https://allegro.pl/*" "Allegro")
+    ("https://www.amazon.pl/*" "Amazon")
 ))
 
 (defun mapped-domain-link-recognizer-domains (link domains)
