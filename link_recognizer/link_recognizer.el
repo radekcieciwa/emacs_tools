@@ -1,6 +1,6 @@
 
  (defun jira-link-recognizer (string)
-   (if (string-match "https?://jira\.*?/browse/\\([a-zA-Z]*-[0-9]*\\)" string)
+   (if (string-match "https?://bmbl.atlassian.net/browse/\\([a-zA-Z]*-[0-9]*\\)" string)
        (let ((issue-number (match-string 1 string)))
 	 (if issue-number
            (cons string issue-number)))))
@@ -43,9 +43,14 @@
     ("https://www.youtube.com/*" "YouTube")
     ("https://bumble.slack.com/*" "Slack")
     ("https://vpn-eu1.staffpass.com/gelato/*" "Gelato")
-    ("https://github.com/*" "GitHub")
     ("https://allegro.pl/*" "Allegro")
     ("https://www.amazon.pl/*" "Amazon")
+    ("https://www.figma.com/*" "Figma")
+    ("https://miro.com/app/*" "Miro")
+    ("https://bmbl.atlassian.net/wiki/*" "Wiki (Atlassian)")
+    ("https://stackoverflow.com/*" "Stack")
+    ("https://mobile-ci.bumble.dev/buildConfiguration/*" "TeamCity")
+    ("https://bumble.sentry.io/*" "Sentry")
 ))
 
 (defun mapped-domain-link-recognizer-domains (link domains)
@@ -81,6 +86,23 @@
     )
   )
 
+(defun github-repo-link-recognizer (string)
+  (if (string-match "https?:\/\/github.com\/\\([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\\)\/?" string)
+      (if-let ((repo-name (match-string 1 string)))
+          (cons string repo-name))))
+
+(defun github-hash-digits-recognizer (kind string)
+  (if (string-match (concat "https?:\/\/github\.com\/.*\/\\([a-zA-Z0-9_-]+\\)\/" kind "\/\\([0-9]+\\)") string)
+      (if-let ((repo-name (match-string 1 string))
+               (number (match-string 2 string)))
+          (cons string (concat repo-name " #" number)))))
+
+(defun github-issue-link-recognizer (string)
+  (github-hash-digits-recognizer "issues" string))
+
+(defun github-pull-link-recognizer (string)
+  (github-hash-digits-recognizer "pull" string))
+
 (defvar org-link-recognizers '(
      mapped-domain-link-recognizer
      jira-link-recognizer
@@ -90,6 +112,9 @@
      qaapi-link-recognizer
      badoo-jira-wiki-link-recognizer
      mobiledoc-link-recognizer
+     github-pull-link-recognizer
+     github-issue-link-recognizer
+     github-repo-link-recognizer
 ))
 
 (defun find-recognizer (value recognizers)
