@@ -36,6 +36,7 @@
 ;; (car (car recognized-domains))
 ;; (cdr recognized-domains)
 (mapped-domain-link-recognizer "https://www.youtube.com/watch?v=XNgRgBP0chY")
+(mapped-domain-link-recognizer "https://console.cloud.google.com/cloud-build/builds;region=us-central1/e80b096d-4136-4cdb-9f28-fb181c771590?project=p-b4f-bld-1428")
 
 (let (
       (t1 (mapped-domain-link-recognizer "https://www.youtube.com/watch?v=XNgRgBP0chY"))

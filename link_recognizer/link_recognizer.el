@@ -51,6 +51,7 @@
     ("https://stackoverflow.com/*" "Stack")
     ("https://mobile-ci.bumble.dev/buildConfiguration/*" "TeamCity")
     ("https://bumble.sentry.io/*" "Sentry")
+    ("https://console.cloud.google.com/cloud-build/*" "Cloud Build")
 ))
 
 (defun mapped-domain-link-recognizer-domains (link domains)
