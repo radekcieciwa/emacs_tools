@@ -529,17 +529,69 @@ skipped entirely."
                      stale-p0)))))))
     (org-focus--aggregate rows (nreverse lint-rows) active-p0 (nreverse stale-p0))))
 
+(defun org-focus--direct-child-markers ()
+  "Return markers for the direct child headings of the heading at point."
+  (save-excursion
+    (org-back-to-heading t)
+    (let* ((root-level (org-current-level))
+           (child-re (format "^\\*\\{%d\\} " (1+ root-level)))
+           (end (save-excursion (org-end-of-subtree t t)))
+           markers)
+      (forward-line 1)
+      (while (re-search-forward child-re end t)
+        (push (copy-marker (match-beginning 0)) markers))
+      (nreverse markers))))
+
+(defun org-focus--collect-children-data ()
+  "Return decomposition data for each direct child of the heading at point.
+Each element is a plist (:heading H :marker M :file F :data D), where D is a
+focus data plist (without its own :children, to avoid recursion)."
+  (let (results)
+    (dolist (m (org-focus--direct-child-markers))
+      (save-excursion
+        (goto-char m)
+        (push (list :heading (org-focus--heading)
+                    :marker m
+                    :file (buffer-file-name)
+                    :data (org-focus--collect
+                           (lambda (fn)
+                             (org-with-wide-buffer (org-map-entries fn nil 'tree)))))
+              results)))
+    (nreverse results)))
+
+(defun org-focus--collect-children-data-global ()
+  "Return decomposition data for each top-level heading across configured files."
+  (let (results)
+    (dolist (file (org-focus--files))
+      (when (and file (file-exists-p file))
+        (with-current-buffer (find-file-noselect file t)
+          (org-with-wide-buffer
+           (goto-char (point-min))
+           (while (re-search-forward "^\\* " nil t)
+             (let ((m (copy-marker (match-beginning 0))))
+               (save-excursion
+                 (goto-char m)
+                 (push (list :heading (org-focus--heading)
+                             :marker m
+                             :file (buffer-file-name)
+                             :data (org-focus--collect
+                                    (lambda (fn) (org-map-entries fn nil 'tree))))
+                       results))))))))
+    (nreverse results)))
+
 (defun org-focus--collect-subtree-data ()
-  "Collect focus data for the subtree at point."
+  "Collect focus data for the subtree at point, including per-child breakdown."
   (unless (org-focus--in-org-buffer-p)
     (user-error "Not in an Org buffer"))
   (org-back-to-heading t)
-  (org-focus--collect
-   (lambda (fn) (org-with-wide-buffer (org-map-entries fn nil 'tree)))))
+  (let ((data (org-focus--collect
+               (lambda (fn) (org-with-wide-buffer (org-map-entries fn nil 'tree))))))
+    (plist-put data :children (org-focus--collect-children-data))))
 
 (defun org-focus--collect-global-data ()
-  "Collect focus data from all configured files."
-  (org-focus--collect #'org-focus--org-files-map-entries))
+  "Collect focus data from all configured files, including per-child breakdown."
+  (let ((data (org-focus--collect #'org-focus--org-files-map-entries)))
+    (plist-put data :children (org-focus--collect-children-data-global))))
 
 (defun org-focus--group-rows (rows)
   "Group ROWS by heading, summing minutes and counting occurrences.
@@ -593,6 +645,49 @@ ORDER is the list of keys to print."
        (format "%s  (%s)"
                (org-focus--format-hours minutes)
                (org-focus--format-ratio minutes total)))))
+  (insert "\n"))
+
+(defun org-focus--minified-hours (minutes)
+  "Format MINUTES as a compact hours cell, or a dot when zero."
+  (if (> minutes 0) (format "%.1f" (/ minutes 60.0)) "·"))
+
+(defun org-focus--child-axis-cells (table order)
+  "Return a string of compact cells for each key in ORDER looked up in TABLE."
+  (mapconcat (lambda (key)
+               (format " %5s" (org-focus--minified-hours (gethash key table 0))))
+             order ""))
+
+(defun org-focus--insert-children-table (children)
+  "Insert a compact per-child decomposition table from CHILDREN.
+CHILDREN is a list of (:heading :marker :file :data) plists.  Each row
+mirrors the parent decomposition (total + invest + domain/activity/intent
+splits) in minified, hours-only form.  The child heading is clickable."
+  (org-focus--insert-section-title
+   (format "By Child (%d)" (length children)))
+  (if (null children)
+      (insert "No child subtrees.\n")
+    (let ((name-w 24))
+      ;; Header row.
+      (insert (format (format "%%-%ds %%6s %%5s" name-w) "Child" "Total" "Inv"))
+      (dolist (c (append org-focus-domain-tags
+                         org-focus-activity-tags
+                         org-focus-intent-tags))
+        (insert (format " %5s" c)))
+      (insert "\n")
+      ;; One row per child.
+      (dolist (child children)
+        (let* ((data (plist-get child :data))
+               (label (truncate-string-to-width
+                       (plist-get child :heading) name-w 0 ?\s "…")))
+          (org-focus--insert-button-line
+           label (plist-get child :marker) (plist-get child :file)
+           (concat
+            (format " %5.1fh %5s"
+                    (/ (plist-get data :total) 60.0)
+                    (org-focus--minified-hours (plist-get data :invest)))
+            (org-focus--child-axis-cells (plist-get data :by-domain) org-focus-domain-tags)
+            (org-focus--child-axis-cells (plist-get data :by-activity) org-focus-activity-tags)
+            (org-focus--child-axis-cells (plist-get data :by-intent) org-focus-intent-tags)))))))
   (insert "\n"))
 
 (defun org-focus--insert-button-line (label marker file &optional suffix)
@@ -662,8 +757,6 @@ If SCOPE-LABEL is provided, show it in the header."
          (total (plist-get data :total))
          (known (plist-get data :known))
          (invest (plist-get data :invest))
-         (active-a (or (plist-get data :active-a) 0))
-         (stale-a (plist-get data :stale-a))
          (warnings (org-focus--warning-lines data))
          (lint (plist-get data :lint))
          (rows (plist-get data :rows)))
@@ -700,31 +793,6 @@ If SCOPE-LABEL is provided, show it in the header."
         (org-focus--insert-table-from-hash
          "Intentionality" (plist-get data :by-intent) total org-focus-intent-tags)
 
-        (org-focus--insert-section-title "Time by Priority")
-        (let ((by-priority (plist-get data :by-priority)))
-          (if (> (hash-table-count by-priority) 0)
-              (dolist (priority org-focus-priorities)
-                (let ((mins (gethash priority by-priority 0)))
-                  (when (> mins 0)
-                    (insert (format "%s: %s\n" priority (org-focus--format-hours mins))))))
-            (insert "No prioritized entries.\n")))
-        (insert "\n")
-
-        (org-focus--insert-section-title "Urgent (P0)")
-        (org-focus--insert-kv-line
-         "Active" (number-to-string active-a)
-         (if (> active-a org-focus-max-active-p0) 'warning 'success))
-        (if stale-a
-            (progn
-              (insert (format "Stale (not clocked in %d days):\n" org-focus-stale-p0-days))
-              (dolist (item stale-a)
-                (org-focus--insert-button-line
-                 (plist-get item :heading)
-                 (plist-get item :marker)
-                 (plist-get item :file))))
-          (insert (propertize "No stale P0 tasks.\n" 'face 'success)))
-        (insert "\n")
-
         (when rows
           (let ((groups (org-focus--group-rows rows)))
             (org-focus--insert-section-title
@@ -758,6 +826,9 @@ If SCOPE-LABEL is provided, show it in the header."
                (plist-get item :file)
                (format "  [%s]" (string-join (plist-get item :issues) "; "))))
           (insert "No metadata issues.\n"))
+        (insert "\n")
+
+        (org-focus--insert-children-table (plist-get data :children))
         (goto-char (point-min))))
     (pop-to-buffer buf)))
 

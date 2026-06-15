@@ -190,6 +190,40 @@
                    (mapcar (lambda (g) (plist-get g :heading)) groups)))
     (should (= 15 (plist-get (car (last groups)) :minutes)))))
 
+;;; Per-child decomposition: org-focus--collect-children-data
+
+(ert-deftest org-focus-test-collect-children-data ()
+  "Direct children of the subtree are decomposed individually."
+  (with-temp-buffer
+    (insert "* Week\n"
+            "** Day Mon\n"
+            "*** TODO A :prod:build:plan:\n"
+            "CLOCK: [2026-06-08 Mon 09:00]--[2026-06-08 Mon 11:00] =>  2:00\n"
+            "** Day Tue\n"
+            "*** TODO B :team:help:unplan:\n"
+            "CLOCK: [2026-06-09 Tue 09:00]--[2026-06-09 Tue 10:00] =>  1:00\n")
+    (org-mode)
+    (goto-char (point-min)) ; on the Week heading
+    (let* ((children (org-focus--collect-children-data))
+           (mon (nth 0 children))
+           (tue (nth 1 children)))
+      (should (= 2 (length children)))
+      (should (string= "Day Mon" (plist-get mon :heading)))
+      (should (string= "Day Tue" (plist-get tue :heading)))
+      (should (= 120 (plist-get (plist-get mon :data) :total)))
+      (should (= 60 (plist-get (plist-get tue :data) :total)))
+      (should (= 120 (gethash "prod" (plist-get (plist-get mon :data) :by-domain) 0)))
+      (should (= 60 (gethash "help" (plist-get (plist-get tue :data) :by-activity) 0))))))
+
+(ert-deftest org-focus-test-collect-children-data-leaf ()
+  "A subtree with no child headings yields no children."
+  (with-temp-buffer
+    (insert "* Lonely :prod:build:plan:\n"
+            "CLOCK: [2026-06-08 Mon 09:00]--[2026-06-08 Mon 10:00] =>  1:00\n")
+    (org-mode)
+    (goto-char (point-min))
+    (should (null (org-focus--collect-children-data)))))
+
 ;;; Warning generation: org-focus--warning-lines
 
 (defun org-focus-tests--data (&rest overrides)

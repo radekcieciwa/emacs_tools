@@ -72,19 +72,46 @@ Aggregates every clock in the measured scope (no week filtering):
 - Activity (build, help, ops, sync)
 - Intentionality (plan, unplan)
 
+**Entries with Clocks section**:
+- One row per distinct heading; occurrences of the same heading are merged
+  (durations summed, occurrence count shown as `(N)` when > 1)
+- Sorted by total duration, descending
+- Clickable links to navigate to the first occurrence
+
 **Warnings**:
-- Too many active P0 (urgent) tasks (> threshold)
-- Stale P0 tasks (not clocked in N days)
 - Metadata issues found
 - Investment ratio below target
 - Unplanned work exceeds threshold
 - Sync/meeting time exceeds threshold
 - Help/support time exceeds threshold
+- ⚠️ _Deprecated (unproven):_ Too many active P0 (urgent) tasks (> threshold)
+- ⚠️ _Deprecated (unproven):_ Stale P0 tasks (not clocked in N days)
 
 **Metadata issues section**:
 - List entries with detected issues
 - Show all issues per entry
 - Clickable links to navigate to entry
+
+**By Child section** (added at the end):
+- Enumerates the direct children of the measured scope (in subtree scope, the
+  child headings; in global scope, the top-level headings per file)
+- Each child is rendered as one compact table row mirroring the parent
+  decomposition in minified, hours-only form: Total, Inv (investment), and one
+  cell per domain / activity / intent tag (`·` denotes zero)
+- The child heading is clickable
+
+#### Deprecated dashboard sections (unproven)
+
+The following sections were **removed** from the rendered dashboard because the
+priority model is not yet proven in practice. The underlying data
+(`:by-priority`, `:active-a`, `:stale-a`) is still collected so the sections can
+be reinstated cheaply if the model is validated:
+
+- ~~**Time by Priority**~~ — hours per FOCUS_PRIORITY level (P0/P1/P2).
+- ~~**Urgent (P0)**~~ — active P0 count + list of stale P0 tasks.
+
+The matching P0 *warnings* are likewise considered deprecated/unproven (see above)
+but remain wired up for now.
 
 ### 2. Linting (`org-focus-lint`)
 
@@ -128,13 +155,18 @@ so the plist shape is identical regardless of scope:
  :total N                               ; total clocked minutes
  :known N                               ; minutes with complete metadata (domain+activity+intent)
  :invest N                              ; minutes tagged invest
- :active-a N                            ; count of active urgent (P0) tasks
- :stale-a [list]                        ; stale urgent tasks (:heading :marker :file :last-clock)
+ :active-a N                            ; [deprecated/unproven] count of active urgent (P0) tasks
+ :stale-a [list]                        ; [deprecated/unproven] stale urgent tasks
  :by-domain {hash: tag → minutes}
  :by-activity {hash: tag → minutes}
  :by-intent {hash: tag → minutes}
- :by-priority {hash: level → minutes})
+ :by-priority {hash: level → minutes}   ; [deprecated/unproven] no longer rendered
+ :children [list])                      ; per-direct-child decomposition (:heading :marker :file :data)
 ```
+
+Each `:children` element wraps a nested data plist of the same shape (minus its
+own `:children`), produced by re-running the collector over that child's
+subtree.
 
 ### Lint issue entry
 

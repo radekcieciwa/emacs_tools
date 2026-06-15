@@ -16,8 +16,9 @@ org-focus/
 ## What it does
 
 - **Dashboard** (`C-c f d`) — sums every clock in the measured scope and breaks
-  it down by domain / activity / intentionality / priority, plus an urgent (P0)
-  section and warnings.
+  it down by domain / activity / intentionality, lists clocked entries (merged
+  by heading, sorted by duration), warns on metadata/ratio issues, and ends with
+  a compact **By Child** table decomposing each direct child subtree.
 - **Lint** (`C-c f l`) — lists entries with missing or conflicting metadata.
 - **Fix** (`C-c f f`) — interactively set the metadata axes on the current entry.
 
