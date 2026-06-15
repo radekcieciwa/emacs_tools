@@ -161,6 +161,35 @@
     (org-next-visible-heading 0)
     (should (not (org-focus--active-p0-p)))))
 
+;;; Row grouping: org-focus--group-rows
+
+(ert-deftest org-focus-test-group-rows-sums-and-counts ()
+  "Same-heading rows are merged: minutes summed, occurrences counted."
+  (let* ((rows (list (list :heading "Build" :minutes 60 :priority "P0" :marker 'm1 :file "a")
+                     (list :heading "Help"  :minutes 30 :priority nil  :marker 'm2 :file "a")
+                     (list :heading "Build" :minutes 90 :priority "P0" :marker 'm3 :file "b")))
+         (groups (org-focus--group-rows rows))
+         (build (seq-find (lambda (g) (string= (plist-get g :heading) "Build")) groups))
+         (help (seq-find (lambda (g) (string= (plist-get g :heading) "Help")) groups)))
+    (should (= 2 (length groups)))
+    (should (= 150 (plist-get build :minutes)))
+    (should (= 2 (plist-get build :count)))
+    (should (= 30 (plist-get help :minutes)))
+    (should (= 1 (plist-get help :count)))
+    ;; Metadata comes from the first-seen occurrence.
+    (should (eq 'm1 (plist-get build :marker)))))
+
+(ert-deftest org-focus-test-group-rows-sorted-descending ()
+  "Groups are returned sorted by total minutes, largest first."
+  (let* ((rows (list (list :heading "Small" :minutes 10 :priority nil :marker nil :file nil)
+                     (list :heading "Big"   :minutes 120 :priority nil :marker nil :file nil)
+                     (list :heading "Mid"   :minutes 60 :priority nil :marker nil :file nil)
+                     (list :heading "Small" :minutes 5 :priority nil :marker nil :file nil)))
+         (groups (org-focus--group-rows rows)))
+    (should (equal '("Big" "Mid" "Small")
+                   (mapcar (lambda (g) (plist-get g :heading)) groups)))
+    (should (= 15 (plist-get (car (last groups)) :minutes)))))
+
 ;;; Warning generation: org-focus--warning-lines
 
 (defun org-focus-tests--data (&rest overrides)

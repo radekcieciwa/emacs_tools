@@ -541,6 +541,36 @@ skipped entirely."
   "Collect focus data from all configured files."
   (org-focus--collect #'org-focus--org-files-map-entries))
 
+(defun org-focus--group-rows (rows)
+  "Group ROWS by heading, summing minutes and counting occurrences.
+Returns a list of plists (:heading :minutes :count :priority :marker :file)
+sorted by :minutes in descending order.  The marker, file, and priority are
+taken from the first-seen occurrence of each heading."
+  (let ((table (make-hash-table :test #'equal))
+        (order '()))
+    (dolist (row rows)
+      (let* ((heading (plist-get row :heading))
+             (existing (gethash heading table)))
+        (if existing
+            (puthash heading
+                     (plist-put
+                      (plist-put existing :minutes
+                                 (+ (plist-get existing :minutes)
+                                    (plist-get row :minutes)))
+                      :count (1+ (plist-get existing :count)))
+                     table)
+          (puthash heading
+                   (list :heading heading
+                         :minutes (plist-get row :minutes)
+                         :count 1
+                         :priority (plist-get row :priority)
+                         :marker (plist-get row :marker)
+                         :file (plist-get row :file))
+                   table)
+          (push heading order))))
+    (sort (mapcar (lambda (h) (gethash h table)) (nreverse order))
+          (lambda (a b) (> (plist-get a :minutes) (plist-get b :minutes))))))
+
 ;;;; Rendering helpers
 
 (defun org-focus--insert-section-title (title)
@@ -696,17 +726,21 @@ If SCOPE-LABEL is provided, show it in the header."
         (insert "\n")
 
         (when rows
-          (org-focus--insert-section-title "Entries with Clocks")
-          (dolist (row rows)
-            (let ((priority (plist-get row :priority)))
-              (org-focus--insert-button-line
-               (plist-get row :heading)
-               (plist-get row :marker)
-               (plist-get row :file)
-               (format "  %s%s"
-                       (org-focus--format-hours (plist-get row :minutes))
-                       (if priority (format "  [%s]" priority) "")))))
-          (insert "\n"))
+          (let ((groups (org-focus--group-rows rows)))
+            (org-focus--insert-section-title
+             (format "Entries with Clocks (%d)" (length groups)))
+            (dolist (g groups)
+              (let ((priority (plist-get g :priority))
+                    (count (plist-get g :count)))
+                (org-focus--insert-button-line
+                 (plist-get g :heading)
+                 (plist-get g :marker)
+                 (plist-get g :file)
+                 (format "%s  %s%s"
+                         (if (> count 1) (format "  (%d)" count) "")
+                         (org-focus--format-hours (plist-get g :minutes))
+                         (if priority (format "  [%s]" priority) "")))))
+            (insert "\n")))
 
         (org-focus--insert-section-title "Warnings")
         (if warnings
