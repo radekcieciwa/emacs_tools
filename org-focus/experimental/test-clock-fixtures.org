@@ -1,0 +1,64 @@
+* Clock Parsing Test Fixtures
+
+This file contains realistic org-mode entries for testing clock summation.
+
+** Single Entry with One Clock
+* TODO Single Clock Entry :prod:build:plan:
+CLOCK: [2026-05-15 Fri 09:00]--[2026-05-15 Fri 17:00] =>  8:00
+
+Expected for week 2026-05-11 to 2026-05-18: 480 minutes
+
+** Single Entry with Multiple Clocks
+* TODO Multiple Clocks Same Entry :prod:build:plan:
+CLOCK: [2026-05-13 Wed 09:00]--[2026-05-13 Wed 12:00] =>  3:00
+CLOCK: [2026-05-13 Wed 13:00]--[2026-05-13 Wed 17:00] =>  4:00
+
+Expected for week: 420 minutes
+
+** Nested Entries (Parent should not include Child)
+* TODO Parent Task :prod:build:plan:
+CLOCK: [2026-05-15 Fri 09:00]--[2026-05-15 Fri 10:00] =>  1:00
+** TODO Child Task :prod:build:plan:
+CLOCK: [2026-05-15 Fri 10:00]--[2026-05-15 Fri 12:00] =>  2:00
+
+Expected for Parent: 60 minutes
+Expected for Child: 120 minutes
+
+** Fractional Hours
+* TODO Task with Fractional Hours :prod:build:plan:
+CLOCK: [2026-05-15 Fri 09:00]--[2026-05-15 Fri 11:30] =>  2:30
+CLOCK: [2026-05-16 Sat 14:15]--[2026-05-16 Sat 16:45] =>  2:30
+
+Expected for week: 300 minutes
+
+** Mixed In and Out of Range
+* TODO Mixed Date Range :prod:build:plan:
+CLOCK: [2026-05-10 Thu 09:00]--[2026-05-10 Thu 17:00] =>  8:00
+CLOCK: [2026-05-15 Fri 09:00]--[2026-05-15 Fri 17:00] =>  8:00
+CLOCK: [2026-05-20 Wed 09:00]--[2026-05-20 Wed 17:00] =>  8:00
+
+Expected for week 2026-05-11 to 2026-05-18: 480 minutes (only Friday)
+
+** No Clocks
+* TODO No Clocks Entry :prod:build:plan:
+
+This entry has no clock lines at all.
+
+Expected: 0 minutes
+
+** Full Week Schedule
+* TODO Monday Work :prod:build:plan:
+CLOCK: [2026-05-11 Mon 09:00]--[2026-05-11 Mon 17:00] =>  8:00
+
+* TODO Wednesday Work :prod:build:plan:
+CLOCK: [2026-05-13 Wed 09:00]--[2026-05-13 Wed 12:00] =>  3:00
+CLOCK: [2026-05-13 Wed 13:00]--[2026-05-13 Wed 17:00] =>  4:00
+
+* TODO Friday Work :prod:build:plan:
+CLOCK: [2026-05-15 Fri 09:00]--[2026-05-15 Fri 16:00] =>  7:00
+
+Expected totals for week:
+- Monday: 480 minutes
+- Wednesday: 420 minutes
+- Friday: 420 minutes
+- Total: 1320 minutes (22 hours)
