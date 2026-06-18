@@ -104,7 +104,21 @@
 (defun github-pull-link-recognizer (string)
   (github-hash-digits-recognizer "pull" string))
 
+(defun teamcity-link-recognizer (string)
+  (if (string-match "https?:\/\/mobile-ci\.bumble\.dev\/buildConfiguration\/\\([a-zA-Z0-9_]+\\)\/\\([0-9]+\\)" string)
+      (if-let ((build-type (match-string 1 string))
+               (build-id (match-string 2 string)))
+          (cons string (concat "TeamCity/" build-type "/" build-id)))))
+
+(defun github-enterprise-pull-link-recognizer (string)
+  (if (string-match "https?:\/\/github\.bumble\.dev\/\\([a-zA-Z0-9_-]+\\)\/\\([a-zA-Z0-9_-]+\\)\/pull\/\\([0-9]+\\)" string)
+      (if-let ((org-name (match-string 1 string))
+               (repo-name (match-string 2 string))
+               (number (match-string 3 string)))
+          (cons string (concat "ghe/" org-name "/" repo-name "/PR#" number)))))
+
 (defvar org-link-recognizers '(
+     teamcity-link-recognizer
      mapped-domain-link-recognizer
      jira-link-recognizer
      usersplit-link-recognizer
@@ -113,6 +127,7 @@
      qaapi-link-recognizer
      badoo-jira-wiki-link-recognizer
      mobiledoc-link-recognizer
+     github-enterprise-pull-link-recognizer
      github-pull-link-recognizer
      github-issue-link-recognizer
      github-repo-link-recognizer

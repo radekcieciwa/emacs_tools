@@ -6,9 +6,9 @@
 ;;(setq debug-on-error t)
 
 (let (
-      (t1 (jira-link-recognizer "https://jira.badoojira.com/browse/IOS-33361"))
+      (t1 (jira-link-recognizer "https://bmbl.atlassian.net/browse/IOS-33361"))
       )
-      (assert (equal '("https://jira.badoojira.com/browse/IOS-33361" . "IOS-33361") t1))
+      (assert (equal '("https://bmbl.atlassian.net/browse/IOS-33361" . "IOS-33361") t1))
       )
 
 ;; usergroup-link-recognizer
@@ -44,6 +44,46 @@
       )
       (assert (equal '("https://www.youtube.com/watch?v=XNgRgBP0chY" . "YouTube") t1))
       (assert (equal nil t2))
+      )
+
+;; teamcity-link-recognizer
+
+(let (
+      (t1 (teamcity-link-recognizer "https://mobile-ci.bumble.dev/buildConfiguration/IOS_StaticQualityGate_Infrastructure/31245522?buildTab=log&focusLine=950&logView=flowAware&linesState=190"))
+      (t2 (teamcity-link-recognizer "https://mobile-ci.bumble.dev/buildConfiguration/IOS_StaticQualityGate_Infrastructure/31245522"))
+      (t3 (teamcity-link-recognizer "https://mobile-ci.bumble.dev/project/IOS_StaticQualityGate_Infrastructure"))
+      )
+      (assert (equal '("https://mobile-ci.bumble.dev/buildConfiguration/IOS_StaticQualityGate_Infrastructure/31245522?buildTab=log&focusLine=950&logView=flowAware&linesState=190" . "TeamCity/IOS_StaticQualityGate_Infrastructure/31245522") t1))
+      (assert (equal '("https://mobile-ci.bumble.dev/buildConfiguration/IOS_StaticQualityGate_Infrastructure/31245522" . "TeamCity/IOS_StaticQualityGate_Infrastructure/31245522") t2))
+      (assert (equal nil t3))
+      )
+
+;; teamcity-link-recognizer via interceptor
+
+(let (
+      (t1 (insert-link-interceptor-for-value "https://mobile-ci.bumble.dev/buildConfiguration/IOS_StaticQualityGate_Infrastructure/31245522?buildTab=log&focusLine=950&logView=flowAware&linesState=190"))
+      )
+      (assert (equal '("https://mobile-ci.bumble.dev/buildConfiguration/IOS_StaticQualityGate_Infrastructure/31245522?buildTab=log&focusLine=950&logView=flowAware&linesState=190" . "TeamCity/IOS_StaticQualityGate_Infrastructure/31245522") t1))
+      )
+
+;; github-enterprise-pull-link-recognizer
+
+(let (
+      (t1 (github-enterprise-pull-link-recognizer "https://github.bumble.dev/ios/bumble/pull/22891/files"))
+      (t2 (github-enterprise-pull-link-recognizer "https://github.bumble.dev/ios/bumble/pull/22891"))
+      (t3 (github-enterprise-pull-link-recognizer "https://github.com/ios/bumble/pull/22891"))
+      )
+      (assert (equal '("https://github.bumble.dev/ios/bumble/pull/22891/files" . "ghe/ios/bumble/PR#22891") t1))
+      (assert (equal '("https://github.bumble.dev/ios/bumble/pull/22891" . "ghe/ios/bumble/PR#22891") t2))
+      (assert (equal nil t3))
+      )
+
+;; github-enterprise-pull-link-recognizer via interceptor
+
+(let (
+      (t1 (insert-link-interceptor-for-value "https://github.bumble.dev/ios/bumble/pull/22891/files"))
+      )
+      (assert (equal '("https://github.bumble.dev/ios/bumble/pull/22891/files" . "ghe/ios/bumble/PR#22891") t1))
       )
 
 ;; org-insert-link-interceptor
