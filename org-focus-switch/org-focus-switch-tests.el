@@ -136,6 +136,36 @@ TASK and PRIORITY tag it; times are stored as seconds."
     (should (= 1 (gethash '("P0" . "none") (plist-get data :edges) 0)))
     (should (= 1 (plist-get data :de-escalations)))))
 
+;;;; Per-day distribution
+
+(ert-deftest org-focus-switch-test-per-day-distribution ()
+  ;; Two days of work.  Day 1: A->B->A = two switches.  Day 2: the overnight
+  ;; boundary A->C counts (session gap is nil) and is attributed to day 2, plus
+  ;; C->D, so day 2 = two switches.  A switch is attributed to the day of the
+  ;; task switched *to*.
+  (org-focus-switch-test--with-org
+      (concat "* A\n:PROPERTIES:\n:FOCUS_PRIORITY: P0\n:END:\n"
+              "CLOCK: [2026-05-13 Wed 09:00]--[2026-05-13 Wed 10:00] =>  1:00\n"
+              "* B\n:PROPERTIES:\n:FOCUS_PRIORITY: P1\n:END:\n"
+              "CLOCK: [2026-05-13 Wed 10:00]--[2026-05-13 Wed 10:30] =>  0:30\n"
+              "* A\n:PROPERTIES:\n:FOCUS_PRIORITY: P0\n:END:\n"
+              "CLOCK: [2026-05-13 Wed 10:30]--[2026-05-13 Wed 11:00] =>  0:30\n"
+              "* C\n:PROPERTIES:\n:FOCUS_PRIORITY: P0\n:END:\n"
+              "CLOCK: [2026-05-14 Thu 09:00]--[2026-05-14 Thu 10:00] =>  1:00\n"
+              "* D\n:PROPERTIES:\n:FOCUS_PRIORITY: P2\n:END:\n"
+              "CLOCK: [2026-05-14 Thu 10:00]--[2026-05-14 Thu 11:00] =>  1:00\n")
+    (let* ((data (org-focus-switch-collect
+                  (lambda (fn) (org-with-wide-buffer (org-map-entries fn nil nil)))))
+           (per-day (plist-get data :per-day)))
+      (should (= 2 (length per-day)))
+      (should (equal "2026-05-13" (plist-get (nth 0 per-day) :date)))
+      (should (equal "2026-05-14" (plist-get (nth 1 per-day) :date)))
+      (should (= 2 (plist-get (nth 0 per-day) :switches)))
+      (should (= 2 (plist-get (nth 1 per-day) :switches)))
+      ;; Per-day switch counts sum to the overall switch count.
+      (should (= (plist-get data :switches)
+                 (apply #'+ (mapcar (lambda (d) (plist-get d :switches)) per-day)))))))
+
 ;;;; Session gap
 
 (ert-deftest org-focus-switch-test-session-gap-suppresses-switch ()
@@ -317,9 +347,11 @@ TASK and PRIORITY tag it; times are stored as seconds."
   (should (equal "2h" (org-focus-switch--format-duration 120)))
   (should (equal "1h 30m" (org-focus-switch--format-duration 90))))
 
-;;;; Rendering smoke test
+;;;; Rendering smoke tests
 
-(ert-deftest org-focus-switch-test-render-produces-both-conclusions ()
+(ert-deftest org-focus-switch-test-embedded-render-is-trimmed ()
+  ;; The embedded (org-focus) render shows the summary + direction tally +
+  ;; per-day distribution, but NOT the matrix or per-edge listing.
   (let* ((data (org-focus-switch-analyze
                 (list (org-focus-switch-test--event 0  "A" "P0" 30)
                       (org-focus-switch-test--event 30 "B" "P1" 30))))
@@ -328,8 +360,30 @@ TASK and PRIORITY tag it; times are stored as seconds."
                  (buffer-string))))
     (should (string-match-p "Task Switching" text))
     (should (string-match-p "Task switches:" text))
+    (should (string-match-p "Switches per day" text))
+    (should (string-match-p "Direction:" text))
+    ;; Trimmed: no matrix and no grouped edge sections.
+    (should-not (string-match-p "Priority transitions" text))
+    (should-not (string-match-p "P0 +-> +P1" text))))
+
+(ert-deftest org-focus-switch-test-dashboard-render-has-graph-and-groups ()
+  ;; The dashboard body carries both conclusions plus the reworked
+  ;; three-section grouping (Lateral / Escalation / De-escalation).
+  (let* ((data (org-focus-switch-analyze
+                (list (org-focus-switch-test--event 0  "A" "P0" 30)
+                      (org-focus-switch-test--event 30 "B" "P1" 30)
+                      (org-focus-switch-test--event 60 "C" "P0" 30))))
+         (text (with-temp-buffer
+                 (org-focus-switch--render-dashboard-content data)
+                 (buffer-string))))
+    (should (string-match-p "Switch frequency" text))
+    (should (string-match-p "Switches per day" text))
     (should (string-match-p "Priority transitions" text))
+    (should (string-match-p "Lateral (0)" text))
+    (should (string-match-p "Escalation (1)" text))
+    (should (string-match-p "De-escalation (1)" text))
     (should (string-match-p "P0 +-> +P1" text))
-    (should (string-match-p "de-escalation" text))))
+    ;; The flat "Edges (by frequency)" section is gone.
+    (should-not (string-match-p "Edges (by frequency)" text))))
 
 ;;; org-focus-switch-tests.el ends here

@@ -97,16 +97,17 @@ optional `org-focus-switch` package is on the `load-path`):
 - Provided by the standalone `org-focus-switch` package, which `org-focus`
   consumes via `(require 'org-focus-switch nil t)` (both integration points
   guarded by `fboundp`, so the dashboard works unchanged without it).
-- Reconstructs the chronological sequence of clock events in the measured scope
-  and reports two conclusions:
-  1. **Switch frequency** — task switches, switches per focused hour, and the
-     average focus-block length (frequent switching vs. long focus periods).
-  2. **Priority-transition graph** — a directed weighted graph of
-     `FOCUS_PRIORITY` transitions (from → to) as an adjacency matrix + a
-     frequency-ranked edge list, each edge classified as escalation /
-     de-escalation / lateral.
+- This is the *compact* embedded view: the **switch-frequency summary** (task
+  switches, switches per focused hour, average focus-block length), the
+  **direction tally** (escalation / de-escalation / lateral counts), and the
+  **per-day switch distribution**.
+- The full **priority-transition graph** (adjacency matrix, direction-grouped
+  edges) and **graph export** deliberately live *only* in the dedicated Org
+  Focus Switch dashboard (`M-x org-focus-switch`, `C-c t s`), not here; the
+  embedded section points to it.
 - Data is attached under the `:switch` key of the dashboard data plist by
-  `org-focus--collect-subtree-data` / `org-focus--collect-global-data`.
+  `org-focus--collect-subtree-data` / `org-focus--collect-global-data`, and
+  rendered via `org-focus-switch-render`.
 - See `org-focus-switch/SPEC.md` for the full contract.
 
 **By Child section** (added at the end):

@@ -10,19 +10,19 @@
 ;;
 ;; Org clocks record *how long* you spent on each task, but not *how often you
 ;; jumped between them*.  This package reconstructs the chronological sequence
-;; of clock events in a scope and extracts two conclusions:
+;; of clock events in a scope and extracts:
 ;;
 ;;   1. Task-switch frequency.  How often did you change tasks?  Reported as
-;;      switches per focused hour, plus the average uninterrupted focus block
-;;      length.  A high rate means fragmented attention; a low rate means long
-;;      focus periods.
+;;      switches per focused hour, the average uninterrupted focus block
+;;      length, and a per-day distribution.  A high rate means fragmented
+;;      attention; a low rate means long focus periods.
 ;;
 ;;   2. The priority-transition graph.  Every task switch is an edge from the
 ;;      priority you left to the priority you moved to (P0 -> P1, P1 -> P1,
 ;;      etc.), read from the FOCUS_PRIORITY property.  The edges form a
-;;      directed weighted graph, rendered as an adjacency matrix and a
-;;      frequency-ranked edge list, with each edge classified as an escalation
-;;      (moving toward the urgent end), a de-escalation, or a lateral move.
+;;      directed weighted graph, rendered as an adjacency matrix and grouped
+;;      into three sections -- lateral, escalation and de-escalation -- each
+;;      carrying its switch count.
 ;;
 ;; The heart of the package is `org-focus-switch-analyze', a *pure* function
 ;; over a list of event plists.  `org-focus-switch-collect' scans an Org scope
@@ -30,11 +30,16 @@
 ;; any buffers.
 ;;
 ;; Consumption:
-;; - Standalone: `M-x org-focus-switch' (bound to C-c t s in Org buffers)
-;;   analyzes the subtree at point; with a prefix argument, the whole buffer.
-;; - Embedded: `org-focus' requires this package and renders a "Task Switching"
-;;   section in its dashboard via `org-focus-switch-collect' /
-;;   `org-focus-switch-render'.
+;; - Dashboard: `M-x org-focus-switch' (bound to C-c t s in Org buffers) opens
+;;   the Org Focus Switch dashboard for the subtree at point (whole buffer with
+;;   a prefix argument).  It shows the frequency summary, the per-day
+;;   distribution and the full priority-transition graph, and exports the graph
+;;   via `e' (DOT/Mermaid/GraphML/CSV/JSON).  Export works only here.
+;; - Embedded: `org-focus' requires this package and renders a compact "Task
+;;   Switching" section in its dashboard via `org-focus-switch-collect' /
+;;   `org-focus-switch-render' -- the frequency summary, direction tally and
+;;   per-day distribution, but not the transition matrix or per-edge graph
+;;   (those live in the dedicated dashboard).
 ;;
 ;; Design notes:
 ;; - Task identity is the normalized heading (TODO state, priority cookie and
@@ -116,8 +121,8 @@ Consulted only when `org-focus-switch-use-priority-cookie' is non-nil."
   :type '(alist :key-type character :value-type string)
   :group 'org-focus-switch)
 
-(defcustom org-focus-switch-buffer-name "*Org Task Switch*"
-  "Name of the standalone report buffer."
+(defcustom org-focus-switch-buffer-name "*Org Focus Switch Dashboard*"
+  "Name of the Org Focus Switch dashboard buffer."
   :type 'string
   :group 'org-focus-switch)
 
@@ -252,6 +257,31 @@ Returns `escalation' (moved to a more urgent level), `de-escalation'
 
 ;;;; Analysis (pure)
 
+(defun org-focus-switch--event-date (event)
+  "Return the local calendar date (\"YYYY-MM-DD\") of EVENT's start time."
+  (format-time-string "%Y-%m-%d"
+                      (seconds-to-time (plist-get event :start))))
+
+(defun org-focus-switch--per-day (day-minutes day-switches)
+  "Build the per-day distribution list from DAY-MINUTES and DAY-SWITCHES hashes.
+Returns a list of plists (:date :switches :minutes :switches-per-hour),
+one per day that has clocked time or switches, sorted by date ascending."
+  (let ((dates (make-hash-table :test #'equal))
+        keys)
+    (maphash (lambda (date _) (puthash date t dates)) day-minutes)
+    (maphash (lambda (date _) (puthash date t dates)) day-switches)
+    (maphash (lambda (date _) (push date keys)) dates)
+    (mapcar (lambda (date)
+              (let ((minutes (gethash date day-minutes 0.0))
+                    (switches (gethash date day-switches 0)))
+                (list :date date
+                      :switches switches
+                      :minutes minutes
+                      :switches-per-hour (if (> minutes 0)
+                                             (/ switches (/ minutes 60.0))
+                                           0.0))))
+            (sort keys #'string<))))
+
 (defun org-focus-switch-analyze (events)
   "Analyze EVENTS, a list of clock event plists, into a metrics plist.
 
@@ -271,10 +301,14 @@ Returns a plist:
    :escalations N            switches toward a more urgent priority
    :de-escalations N         switches toward a less urgent priority
    :laterals N               switches between equal priorities
+   :per-day LIST             per-day distribution: plists (:date :switches
+                             :minutes :switches-per-hour), date-ascending
    :order LIST)              priority labels in rank order, none last"
   (let* ((sorted (sort (copy-sequence events)
                        (lambda (a b) (< (plist-get a :start) (plist-get b :start)))))
          (edges (make-hash-table :test #'equal))
+         (day-minutes (make-hash-table :test #'equal))
+         (day-switches (make-hash-table :test #'equal))
          (gap-secs (and (numberp org-focus-switch-session-gap-minutes)
                         (> org-focus-switch-session-gap-minutes 0)
                         (* 60 org-focus-switch-session-gap-minutes)))
@@ -286,27 +320,32 @@ Returns a plist:
          (laterals 0)
          prev)
     (dolist (event sorted)
-      (cl-incf total (/ (- (plist-get event :end) (plist-get event :start)) 60.0))
-      (if (null prev)
-          (setq blocks 1)
-        (let* ((gap (- (plist-get event :start) (plist-get prev :end)))
-               (session-break (and gap-secs (> gap gap-secs)))
-               (changed (not (equal (plist-get event :task) (plist-get prev :task)))))
-          (cond
-           (session-break
-            ;; A break, not a deliberate switch, but a fresh focus block.
-            (cl-incf blocks))
-           (changed
-            (cl-incf switches)
-            (cl-incf blocks)
-            (let* ((from (org-focus-switch--prio-label (plist-get prev :priority)))
-                   (to (org-focus-switch--prio-label (plist-get event :priority)))
-                   (key (cons from to)))
-              (puthash key (1+ (gethash key edges 0)) edges)
-              (pcase (org-focus-switch--direction from to)
-                ('escalation (cl-incf escalations))
-                ('de-escalation (cl-incf de-escalations))
-                ('lateral (cl-incf laterals))))))))
+      (let ((date (org-focus-switch--event-date event))
+            (minutes (/ (- (plist-get event :end) (plist-get event :start)) 60.0)))
+        (cl-incf total minutes)
+        (puthash date (+ minutes (gethash date day-minutes 0.0)) day-minutes)
+        (if (null prev)
+            (setq blocks 1)
+          (let* ((gap (- (plist-get event :start) (plist-get prev :end)))
+                 (session-break (and gap-secs (> gap gap-secs)))
+                 (changed (not (equal (plist-get event :task) (plist-get prev :task)))))
+            (cond
+             (session-break
+              ;; A break, not a deliberate switch, but a fresh focus block.
+              (cl-incf blocks))
+             (changed
+              (cl-incf switches)
+              (cl-incf blocks)
+              ;; Attribute the switch to the day of the task switched *to*.
+              (puthash date (1+ (gethash date day-switches 0)) day-switches)
+              (let* ((from (org-focus-switch--prio-label (plist-get prev :priority)))
+                     (to (org-focus-switch--prio-label (plist-get event :priority)))
+                     (key (cons from to)))
+                (puthash key (1+ (gethash key edges 0)) edges)
+                (pcase (org-focus-switch--direction from to)
+                  ('escalation (cl-incf escalations))
+                  ('de-escalation (cl-incf de-escalations))
+                  ('lateral (cl-incf laterals)))))))))
       (setq prev event))
     (list :events (length sorted)
           :total-minutes total
@@ -318,6 +357,7 @@ Returns a plist:
           :escalations escalations
           :de-escalations de-escalations
           :laterals laterals
+          :per-day (org-focus-switch--per-day day-minutes day-switches)
           :order (append org-focus-switch-priorities
                          (list org-focus-switch-none-label)))))
 
@@ -372,55 +412,121 @@ handed to `org-focus-switch-analyze'."
         (insert (format "%7s" (if (> count 0) (number-to-string count) "·")))))
     (insert "\n")))
 
-(defvar org-focus-switch--last-data nil
-  "Most recently rendered analysis data, reused by `org-focus-switch-export'.")
+(defun org-focus-switch--render-summary (data)
+  "Insert the switch-frequency conclusion for DATA (Conclusion 1)."
+  (insert (format "%-20s %d\n" "Clock events:" (plist-get data :events)))
+  (insert (format "%-20s %d  (%.1f /focused-h)\n"
+                  "Task switches:" (plist-get data :switches)
+                  (plist-get data :switches-per-hour)))
+  (insert (format "%-20s %d  (avg %s each)\n"
+                  "Focus blocks:" (plist-get data :blocks)
+                  (org-focus-switch--format-duration
+                   (plist-get data :avg-block-minutes))))
+  (insert (format "%-20s %s\n"
+                  "Clocked time:"
+                  (org-focus-switch--format-duration
+                   (plist-get data :total-minutes)))))
+
+(defun org-focus-switch--render-per-day (data)
+  "Insert the per-day switch-frequency distribution for DATA.
+One row per day: the switch count, the rate per focused hour, and a bar
+scaled to the busiest day so the shape of the distribution is visible."
+  (insert (propertize "Switches per day\n" 'face 'bold))
+  (let ((per-day (plist-get data :per-day)))
+    (if (null per-day)
+        (insert "  —\n")
+      (let ((max-switches (apply #'max 1 (mapcar (lambda (d) (plist-get d :switches))
+                                                 per-day))))
+        (insert (format "  %-12s %8s %11s  %s\n"
+                        "Date" "Switches" "/focused-h" "Distribution"))
+        (dolist (day per-day)
+          (let* ((switches (plist-get day :switches))
+                 (bar-width (round (* 20.0 (/ (float switches) max-switches)))))
+            (insert (format "  %-12s %8d %11.1f  %s\n"
+                            (plist-get day :date)
+                            switches
+                            (plist-get day :switches-per-hour)
+                            (make-string bar-width ?█))))))))
+  (insert "\n"))
+
+(defun org-focus-switch--render-direction-summary (data)
+  "Insert the one-line direction tally for DATA."
+  (insert (format "%-20s %d escalation(s), %d de-escalation(s), %d lateral\n"
+                  "Direction:"
+                  (plist-get data :escalations)
+                  (plist-get data :de-escalations)
+                  (plist-get data :laterals))))
+
+(defun org-focus-switch--render-matrix-section (data)
+  "Insert the \"Priority transitions\" adjacency matrix for DATA."
+  (insert (propertize "Priority transitions (from -> to)\n" 'face 'bold))
+  (org-focus-switch--insert-matrix (plist-get data :order) (plist-get data :edges)))
+
+(defun org-focus-switch--render-groups (data)
+  "Insert the switches grouped into three direction sections with counters.
+Each of Lateral, Escalation and De-escalation is a header carrying its
+switch count, followed by the edges in that group ordered by frequency."
+  (let ((edges (org-focus-switch--graph-edges data)))
+    (dolist (group (list (list 'lateral "Lateral" (plist-get data :laterals))
+                         (list 'escalation "Escalation" (plist-get data :escalations))
+                         (list 'de-escalation "De-escalation" (plist-get data :de-escalations))))
+      (let* ((direction (nth 0 group))
+             (label (nth 1 group))
+             (count (nth 2 group))
+             (members (cl-remove-if-not
+                       (lambda (e) (eq (plist-get e :direction) direction))
+                       edges)))
+        (insert (propertize (format "%s (%d)\n" label count) 'face 'bold))
+        (if (null members)
+            (insert "  —\n")
+          (dolist (e members)
+            (insert (format "  %-4s -> %-4s  %3d\n"
+                            (plist-get e :from)
+                            (plist-get e :to)
+                            (plist-get e :weight)))))
+        (insert "\n")))))
 
 (defun org-focus-switch-render (data)
-  "Insert the \"Task Switching\" analysis section for DATA at point.
-DATA is the plist returned by `org-focus-switch-analyze'.  Suitable for
-embedding in the `org-focus' dashboard buffer or any text buffer."
-  (setq org-focus-switch--last-data data)
+  "Insert a compact \"Task Switching\" section for DATA at point.
+Used to embed switch metrics in the `org-focus' dashboard: it shows the
+frequency conclusion and the direction tally only.  The full
+priority-transition graph (matrix and per-direction edges) lives in the
+dedicated dashboard opened by \\[org-focus-switch]."
   (insert (propertize "Task Switching\n" 'face 'bold))
   (let ((events (plist-get data :events)))
     (if (or (null events) (= events 0))
         (insert "No clock events in scope.\n\n")
-      (let ((switches (plist-get data :switches))
-            (order (plist-get data :order))
-            (edges (plist-get data :edges)))
-        ;; Conclusion 1: how frequently tasks changed.
-        (insert (format "%-20s %d\n" "Clock events:" events))
-        (insert (format "%-20s %d  (%.1f /focused-h)\n"
-                        "Task switches:" switches
-                        (plist-get data :switches-per-hour)))
-        (insert (format "%-20s %d  (avg %s each)\n"
-                        "Focus blocks:" (plist-get data :blocks)
-                        (org-focus-switch--format-duration
-                         (plist-get data :avg-block-minutes))))
-        (insert (format "%-20s %s\n\n"
-                        "Clocked time:"
-                        (org-focus-switch--format-duration
-                         (plist-get data :total-minutes))))
-        ;; Conclusion 2: the priority-transition graph.
-        (if (= switches 0)
+      (progn
+        (org-focus-switch--render-summary data)
+        (if (= (plist-get data :switches) 0)
+            (insert "\nNo task switches: a single unbroken focus block.\n")
+          (progn
+            (insert "\n")
+            (org-focus-switch--render-direction-summary data)
+            (insert "\n")
+            (org-focus-switch--render-per-day data)))
+        (insert (propertize "Full transition graph: M-x org-focus-switch\n\n"
+                            'face 'shadow)))))
+  data)
+
+(defun org-focus-switch--render-dashboard-content (data)
+  "Insert the full dashboard body for DATA at point.
+Both conclusions: the frequency summary, then the priority-transition
+graph as an adjacency matrix and three direction-grouped sections."
+  (let ((events (plist-get data :events)))
+    (if (or (null events) (= events 0))
+        (insert "No clock events in scope.\n\n")
+      (progn
+        (insert (propertize "Switch frequency\n" 'face 'bold))
+        (org-focus-switch--render-summary data)
+        (insert "\n")
+        (org-focus-switch--render-per-day data)
+        (if (= (plist-get data :switches) 0)
             (insert "No task switches: a single unbroken focus block.\n\n")
           (progn
-            (insert (propertize "Priority transitions (from -> to)\n" 'face 'bold))
-            (org-focus-switch--insert-matrix order edges)
+            (org-focus-switch--render-matrix-section data)
             (insert "\n")
-            (insert (propertize "Edges (by frequency)\n" 'face 'bold))
-            (dolist (item (org-focus-switch--edge-items edges))
-              (let ((from (car (car item)))
-                    (to (cdr (car item)))
-                    (count (cdr item)))
-                (insert (format "  %-4s -> %-4s  %3d  %s\n"
-                                from to count
-                                (symbol-name (org-focus-switch--direction from to))))))
-            (insert (format "\n%-20s %d escalation(s), %d de-escalation(s), %d lateral\n\n"
-                            "Direction:"
-                            (plist-get data :escalations)
-                            (plist-get data :de-escalations)
-                            (plist-get data :laterals))))))))
-  data)
+            (org-focus-switch--render-groups data)))))))
 
 ;;;; Graph export
 
@@ -592,86 +698,80 @@ FORMAT is one of the symbols in `org-focus-switch-export-formats'
     ('json "json")
     (_ "txt")))
 
-(defun org-focus-switch--data-for-export (arg)
-  "Return analysis data to export given prefix ARG.
-In an Org buffer, collect fresh from point (subtree; whole buffer with a
-prefix ARG).  Elsewhere (e.g. a report buffer) reuse the last rendered
-data."
-  (cond
-   ((derived-mode-p 'org-mode)
-    (let ((scope (if arg nil 'tree)))
-      (save-excursion
-        (unless arg (org-back-to-heading t))
-        (org-focus-switch-collect
-         (lambda (fn) (org-with-wide-buffer (org-map-entries fn nil scope)))))))
-   (org-focus-switch--last-data)
-   (t (user-error "No task-switch data to export; run `org-focus-switch' first"))))
+(defvar-local org-focus-switch--dashboard-data nil
+  "Analysis data backing the current Org Focus Switch dashboard buffer.
+Set by `org-focus-switch--render-dashboard'; the sole data source for
+`org-focus-switch-export', which is why export works only in the dashboard.")
 
-;;;###autoload
-(defun org-focus-switch-export (&optional arg)
-  "Export the priority-transition graph in a chosen format.
-Prompts for one of `org-focus-switch-export-formats' (DOT, Mermaid,
-GraphML, CSV, JSON) and renders it into `org-focus-switch-export-buffer-name',
-then offers to write it to a file.
+(defun org-focus-switch-export ()
+  "Export the dashboard's priority-transition graph in a chosen format.
+Only works inside the Org Focus Switch dashboard (\\[org-focus-switch]),
+operating on the graph it is currently showing.  Prompts for one of
+`org-focus-switch-export-formats' (DOT, Mermaid, GraphML, CSV, JSON),
+renders it into `org-focus-switch-export-buffer-name', and offers to
+write it to a file."
+  (interactive)
+  (let ((data org-focus-switch--dashboard-data))
+    (unless data
+      (user-error "Export is only available in the Org Focus Switch dashboard (M-x org-focus-switch)"))
+    (let* ((name (completing-read "Export graph as: "
+                                  (mapcar #'car org-focus-switch-export-formats)
+                                  nil t))
+           (format (cdr (assoc name org-focus-switch-export-formats)))
+           (text (org-focus-switch-to-format data format))
+           (buf (get-buffer-create org-focus-switch-export-buffer-name)))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (fundamental-mode)
+          (insert text)
+          (goto-char (point-min))))
+      (pop-to-buffer buf)
+      (when (y-or-n-p (format "Write %s export to a file? " name))
+        (let ((file (read-file-name
+                     "Write to: " nil nil nil
+                     (format "priority-transitions.%s"
+                             (org-focus-switch--format-extension format)))))
+          (with-temp-file file (insert text))
+          (message "Wrote %s graph to %s" name file))))))
 
-Data source: in an Org buffer the graph is collected from the subtree at
-point (or the whole buffer with a prefix ARG); in the report buffer the
-most recently rendered graph is reused."
-  (interactive "P")
-  (let* ((data (org-focus-switch--data-for-export arg))
-         (name (completing-read "Export graph as: "
-                                (mapcar #'car org-focus-switch-export-formats)
-                                nil t))
-         (format (cdr (assoc name org-focus-switch-export-formats)))
-         (text (org-focus-switch-to-format data format))
-         (buf (get-buffer-create org-focus-switch-export-buffer-name)))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (fundamental-mode)
-        (insert text)
-        (goto-char (point-min))))
-    (pop-to-buffer buf)
-    (when (y-or-n-p (format "Write %s export to a file? " name))
-      (let ((file (read-file-name
-                   "Write to: " nil nil nil
-                   (format "priority-transitions.%s"
-                           (org-focus-switch--format-extension format)))))
-        (with-temp-file file (insert text))
-        (message "Wrote %s graph to %s" name file)))))
+;;;; Dashboard command
 
-;;;; Standalone command
-
-(defvar org-focus-switch-report-mode-map
+(defvar org-focus-switch-dashboard-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "e") #'org-focus-switch-export)
     (define-key map (kbd "g") #'org-focus-switch-export)
     map)
-  "Keymap for the standalone `org-focus-switch' report buffer.")
+  "Keymap for the Org Focus Switch dashboard buffer.")
 
-(defun org-focus-switch--render-buffer (data scope-label)
-  "Render DATA into the standalone report buffer, noting SCOPE-LABEL."
+(defun org-focus-switch--render-dashboard (data scope-label)
+  "Render DATA into the dashboard buffer, noting SCOPE-LABEL.
+Stashes DATA buffer-locally so `org-focus-switch-export' can act on it."
   (let ((buf (get-buffer-create org-focus-switch-buffer-name)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
         (special-mode)
-        (use-local-map (make-composed-keymap org-focus-switch-report-mode-map
+        (use-local-map (make-composed-keymap org-focus-switch-dashboard-mode-map
                                              (current-local-map)))
-        (insert (propertize "Org Task Switch" 'face '(:height 1.2 :weight bold)))
+        (setq org-focus-switch--dashboard-data data)
+        (insert (propertize "Org Focus Switch Dashboard"
+                            'face '(:height 1.3 :weight bold)))
         (insert (format " (%s)\n\n" scope-label))
-        (org-focus-switch-render data)
-        (insert (propertize "Press e to export the transition graph (DOT/Mermaid/GraphML/CSV/JSON).\n"
-                            'face 'shadow))
+        (org-focus-switch--render-dashboard-content data)
+        (insert (propertize
+                 "Press e to export the transition graph (DOT/Mermaid/GraphML/CSV/JSON).\n"
+                 'face 'shadow))
         (goto-char (point-min))))
     (pop-to-buffer buf)))
 
 ;;;###autoload
 (defun org-focus-switch (&optional arg)
-  "Analyze task switching for the subtree at point.
-With a prefix ARG, analyze the whole current buffer instead.  Opens a
-read-only report showing the switch frequency and the priority-transition
-graph."
+  "Open the Org Focus Switch dashboard for the subtree at point.
+With a prefix ARG, analyze the whole current buffer instead.  The
+read-only dashboard shows the switch frequency, the per-day switch
+distribution, and the priority-transition graph, and offers graph export
+via `e'."
   (interactive "P")
   (unless (derived-mode-p 'org-mode)
     (user-error "Not in an Org buffer"))
@@ -682,7 +782,7 @@ graph."
                  (org-focus-switch-collect
                   (lambda (fn)
                     (org-with-wide-buffer (org-map-entries fn nil scope)))))))
-    (org-focus-switch--render-buffer data label)))
+    (org-focus-switch--render-dashboard data label)))
 
 ;;;###autoload
 (with-eval-after-load 'org

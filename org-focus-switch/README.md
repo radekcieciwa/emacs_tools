@@ -1,51 +1,74 @@
 # org-focus-switch
 
-Reconstruct the order in which you clocked tasks and answer two questions:
+Reconstruct the order in which you clocked tasks and answer:
 
-1. **How often did I switch tasks?** — as a rate (switches per focused hour)
-   plus the average uninterrupted focus-block length. Frequent switching vs.
-   long focus periods.
+1. **How often did I switch tasks?** — as a rate (switches per focused hour),
+   the average uninterrupted focus-block length, and a **per-day distribution**.
+   Frequent switching vs. long focus periods.
 2. **How did priority move when I switched?** — a directed, weighted graph of
-   `FOCUS_PRIORITY` transitions (P0 → P1, P1 → P1, …), classified into
-   escalations, de-escalations and lateral moves.
+   `FOCUS_PRIORITY` transitions (P0 → P1, P1 → P1, …), grouped into
+   **lateral / escalation / de-escalation** with a count each.
 
 Org clocks tell you *how long* you spent on each task. This package tells you
 *how you moved between them*.
 
+## Two dashboards
+
+| | Frequency summary | Per-day distribution | Direction tally | Transition matrix | Grouped edges | Export |
+|--|:--:|:--:|:--:|:--:|:--:|:--:|
+| **Org Focus Switch dashboard** (`C-c t s`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (`e`) |
+| **org-focus dashboard** section (`C-c f d`) | ✓ | ✓ | ✓ | — | — | — |
+
+The dedicated dashboard is the full view (and the only place graph export
+works). The org-focus dashboard keeps a compact "Task Switching" section — the
+headline numbers and the per-day distribution — and points to the full
+dashboard for the transition graph.
+
 ## Commands
 
-- `M-x org-focus-switch` — bound to `C-c t s` in Org buffers. Analyzes the
-  subtree at point; with a prefix (`C-u C-c t s`), the whole buffer. Opens the
-  read-only `*Org Task Switch*` report.
-- `M-x org-focus-switch-export` — export the transition graph in a standard
-  format (see [Export](#exporting-the-graph)). Also bound to `e` inside the
-  report buffer.
-- Inside the **org-focus dashboard** (`C-c f d`) the same analysis appears as a
-  "Task Switching" section — see [Integration](#integration-with-org-focus).
+- `M-x org-focus-switch` — bound to `C-c t s` in Org buffers. Opens the
+  read-only **Org Focus Switch dashboard** for the subtree at point; with a
+  prefix (`C-u C-c t s`), the whole buffer.
+- `M-x org-focus-switch-export` — export the transition graph (see
+  [Export](#exporting-the-graph)). **Only works inside the dashboard**; also
+  bound to `e` there.
 
-## Example report
+## Example dashboard
 
 ```
-Task Switching
-Clock events:        4
-Task switches:       3  (1.0 /focused-h)
-Focus blocks:        4  (avg 45m each)
-Clocked time:        3h
+Org Focus Switch Dashboard (buffer)
+
+Switch frequency
+Clock events:        5
+Task switches:       4  (1.1 /focused-h)
+Focus blocks:        5  (avg 42m each)
+Clocked time:        3h 30m
+
+Switches per day
+  Date         Switches  /focused-h  Distribution
+  2026-05-13          2         0.9  ██████████
+  2026-05-14          2         1.6  ████████████████████
 
 Priority transitions (from -> to)
          ->P0   ->P1   ->P2 ->none
-P0          1      ·      1      ·
+P0          1      1      1      ·
 P1          ·      ·      ·      ·
 P2          1      ·      ·      ·
 none        ·      ·      ·      ·
 
-Edges (by frequency)
-  P0   -> P0      1  lateral
-  P2   -> P0      1  escalation
-  P0   -> P2      1  de-escalation
+Lateral (1)
+  P0   -> P0      1
 
-Direction:           1 escalation(s), 1 de-escalation(s), 1 lateral
+Escalation (1)
+  P2   -> P0      1
+
+De-escalation (2)
+  P0   -> P1      1
+  P0   -> P2      1
 ```
+
+The per-day **Distribution** bar is scaled to the busiest day, so the shape of
+your switching over time is visible at a glance.
 
 ## How it works
 
@@ -60,7 +83,11 @@ Direction:           1 escalation(s), 1 de-escalation(s), 1 lateral
   `from-priority → to-priority`.
 - **Direction** is by urgency rank (`org-focus-switch-priorities`, most urgent
   first; missing priority ranks last as `none`): moving to a more urgent level
-  is an escalation, less urgent is a de-escalation, equal is lateral.
+  is an escalation, less urgent is a de-escalation, equal is lateral. Edges are
+  grouped under those three headers, each showing its total switch count.
+- The **per-day distribution** attributes each switch to the day of the task
+  switched *to*, and reports, per day, the switch count and the rate per
+  focused hour. Per-day counts sum to the overall total.
 
 ### Where priority comes from
 
@@ -79,9 +106,10 @@ carry a priority in either form.)
 
 ## Exporting the graph
 
-`M-x org-focus-switch-export` (or press `e` in the report) renders the
-priority-transition graph — a **directed weighted graph**, nodes = priorities,
-edge weight = switch count, plus a `direction` attribute — in a standard format:
+`M-x org-focus-switch-export` (or press `e` **in the dashboard** — export works
+nowhere else) renders the priority-transition graph — a **directed weighted
+graph**, nodes = priorities, edge weight = switch count, plus a `direction`
+attribute — in a standard format:
 
 | Format | Consumers |
 |--------|-----------|
@@ -91,7 +119,8 @@ edge weight = switch count, plus a `direction` attribute — in a standard forma
 | **CSV** | Spreadsheets, pandas; `from,to,weight,direction` edge list. |
 | **JSON** | Anything; includes `nodes`, `edges`, and the headline `metrics`. |
 
-The command prompts for the format, shows the result in
+The command operates on the graph the dashboard is currently showing (held
+buffer-locally), prompts for the format, shows the result in
 `*Org Task Switch Export*`, and offers to write it to a file with the right
 extension. `org-focus-switch-to-format` is the pure `(DATA FORMAT) → string`
 function behind it.
@@ -114,9 +143,11 @@ but are not counted as switches. Default `nil` counts every boundary.
 ## Integration with org-focus
 
 `org-focus` requires this package optionally and, when it is on the
-`load-path`, renders the "Task Switching" section in its dashboard over the same
-scope (subtree or global). No configuration is needed beyond putting both
-directories on the `load-path`:
+`load-path`, renders a compact "Task Switching" section in its dashboard over
+the same scope (subtree or global) — the frequency summary, direction tally and
+per-day distribution. The transition matrix, grouped edges and export live only
+in the dedicated dashboard (`C-c t s`). No configuration is needed beyond
+putting both directories on the `load-path`:
 
 ```elisp
 (add-to-list 'load-path "/path/to/development/org-focus-switch")
@@ -140,7 +171,7 @@ package is absent.
 | `org-focus-switch-none-label` | `"none"` | Label for entries with no priority. |
 | `org-focus-switch-exclude-tags` | `("private")` | Excluded (inherited) tags. |
 | `org-focus-switch-session-gap-minutes` | `nil` | Idle gap that splits sessions. |
-| `org-focus-switch-buffer-name` | `"*Org Task Switch*"` | Standalone report buffer. |
+| `org-focus-switch-buffer-name` | `"*Org Focus Switch Dashboard*"` | Dashboard buffer. |
 | `org-focus-switch-export-formats` | DOT/Mermaid/GraphML/CSV/JSON | Formats offered by export. |
 
 ## Tests

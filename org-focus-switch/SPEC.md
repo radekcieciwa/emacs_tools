@@ -9,10 +9,28 @@ tasks, and how the priority of your work moved when you did*.
 
 It is a standalone package (feature `org-focus-switch`, file
 `org-focus-switch.el`, in `org-focus-switch/`). It does not depend on
-`org-focus`; instead `org-focus` optionally **consumes** it to render an extra
-dashboard section.
+`org-focus`; instead `org-focus` optionally **consumes** it to render a compact
+section in its dashboard.
 
-## The two conclusions
+## Two surfaces
+
+The same analysis (`org-focus-switch-analyze`) drives two renderings:
+
+| Element | Dedicated dashboard (`org-focus-switch`) | Embedded org-focus section (`org-focus-switch-render`) |
+|---------|:--:|:--:|
+| Switch-frequency summary | ✓ | ✓ |
+| Per-day distribution | ✓ | ✓ |
+| Direction tally (one line) | — (implied by group headers) | ✓ |
+| Priority-transition matrix | ✓ | — |
+| Direction-grouped edges | ✓ | — |
+| Graph export | ✓ (only here) | — |
+
+The dedicated dashboard (`org-focus-switch--render-dashboard-content`) is the
+full view; the embedded section (`org-focus-switch-render`) is deliberately
+trimmed to the headline numbers and per-day distribution, pointing to the
+dashboard for the transition graph.
+
+## The conclusions
 
 ### 1. Task-switch frequency
 
@@ -25,16 +43,23 @@ dashboard section.
   (`= switches + 1` when there is no session splitting). The **average block
   length** (`total-minutes / blocks`) is the natural inverse of the switch
   rate: "on average I focus N minutes before changing task".
+- **Per-day distribution** (`:per-day`) — one row per day carrying that day's
+  switch count and rate per focused hour, with a bar scaled to the busiest day.
+  Each switch is attributed to the local calendar day of the task switched
+  *to*; per-day counts sum to the overall switch count. Days are ascending.
 
 ### 2. Priority-transition graph
 
 Every task switch is a directed edge from the priority you left to the priority
-you moved to, read from the `FOCUS_PRIORITY` property (P0 → P1, P1 → P1, …).
-The edges form a **directed weighted graph** presented two ways:
+you moved to, read from the priority source (see [Priority
+resolution](#priority-resolution)) (P0 → P1, P1 → P1, …). The edges form a
+**directed weighted graph** presented two ways:
 
 - an **adjacency matrix** (rows = from-priority, columns = to-priority, cell =
   count, `·` for zero);
-- a **frequency-ranked edge list**, each edge classified by direction.
+- **three direction-grouped sections** — Lateral, Escalation and De-escalation
+  — each headed by its total switch count, listing its edges by frequency.
+  (This replaces the earlier flat "Edges (by frequency)" list.)
 
 Each edge is classified relative to urgency rank (position in
 `org-focus-switch-priorities`, most urgent first; unknown/absent priorities rank
@@ -106,17 +131,21 @@ counts as a switch regardless of gap.
 ;; Scan a scope into events (via a MAP-FN callback) and analyze.
 (org-focus-switch-collect MAP-FN) => DATA-PLIST
 
-;; Insert the "Task Switching" section for DATA at point in any text buffer.
+;; Insert the compact embedded section for DATA (summary + direction tally +
+;; per-day distribution) at point in any text buffer.  Used by org-focus.
 (org-focus-switch-render DATA)
 
-;; Interactive standalone report (subtree; C-u for whole buffer).
+;; Insert the full dashboard body for DATA (both conclusions + grouped edges).
+(org-focus-switch--render-dashboard-content DATA)
+
+;; Interactive dashboard (subtree; C-u for whole buffer).
 (org-focus-switch &optional ARG)
 
 ;; Serialize the transition graph to a standard format (pure).
 (org-focus-switch-to-format DATA FORMAT) => STRING
 
-;; Interactive export: prompt for a format, render, optionally write a file.
-(org-focus-switch-export &optional ARG)
+;; Interactive export — only inside the dashboard; acts on its buffer-local data.
+(org-focus-switch-export)
 ```
 
 `MAP-FN` receives a per-entry callback and maps it over the desired scope,
@@ -145,6 +174,9 @@ mirroring the scope callbacks used inside `org-focus` (e.g.
  :escalations N
  :de-escalations N
  :laterals N
+ :per-day LIST           ; per-day distribution, date-ascending; each element
+                         ;   (:date "YYYY-MM-DD" :switches N :minutes FLOAT
+                         ;    :switches-per-hour FLOAT)
  :order LIST)            ; priority labels in rank order, none label last
 ```
 
@@ -169,13 +201,13 @@ Node set = the labels appearing in any edge, ordered by `:order` (rank order)
 with unlisted labels last (`org-focus-switch--graph-nodes`); edges are emitted
 most-frequent-first (`org-focus-switch--graph-edges`).
 
-`org-focus-switch-export` chooses the data source by context: in an Org buffer
-it collects fresh from point (subtree, or whole buffer with a prefix argument);
-elsewhere (e.g. the report buffer) it reuses `org-focus-switch--last-data`,
-which `org-focus-switch-render` records on every render. It renders into
+`org-focus-switch-export` **works only inside the dashboard**. The dashboard
+stashes its analysis data in the buffer-local `org-focus-switch--dashboard-data`
+(set by `org-focus-switch--render-dashboard`); export reads that variable and
+errors with a hint elsewhere. It renders into
 `org-focus-switch-export-buffer-name` and offers to write a file with a
 format-appropriate extension (`dot`/`mmd`/`graphml`/`csv`/`json`). In the
-report buffer, `e` is bound to it.
+dashboard, `e` (and `g`) are bound to it.
 
 ## Customization
 
@@ -188,7 +220,7 @@ org-focus-switch-cookie-priority-alist '((?A . "P0") (?B . "P1") (?C . "P2"))
 org-focus-switch-none-label            "none"
 org-focus-switch-exclude-tags          '("private")
 org-focus-switch-session-gap-minutes   nil                ; or a positive integer
-org-focus-switch-buffer-name           "*Org Task Switch*"
+org-focus-switch-buffer-name           "*Org Focus Switch Dashboard*"
 org-focus-switch-export-buffer-name    "*Org Task Switch Export*"
 org-focus-switch-export-formats        '(("dot" . dot) ("mermaid" . mermaid) ...)
 ```
@@ -201,16 +233,19 @@ when present:
 - attaches `:switch` data to its dashboard data plist in
   `org-focus--collect-subtree-data` / `org-focus--collect-global-data` (over the
   same subtree / global scope);
-- renders the "Task Switching" section in `org-focus--render-dashboard`, after
-  the Domain/Activity/Intentionality tables, via `org-focus-switch-render`.
+- renders the compact "Task Switching" section in `org-focus--render-dashboard`,
+  after the Domain/Activity/Intentionality tables, via `org-focus-switch-render`
+  (summary + direction tally + per-day distribution only — no matrix, no
+  grouped edges, no export).
 
 Both integration points are guarded by `fboundp`, so `org-focus` loads and runs
 unchanged when the package is not on the `load-path`.
 
 ## Keybinding
 
-`C-c t s` in Org buffers → `org-focus-switch` (standalone report; `C-u` for the
-whole buffer). Set up on `org` load via `with-eval-after-load`.
+`C-c t s` in Org buffers → `org-focus-switch` (dashboard; `C-u` for the whole
+buffer). Set up on `org` load via `with-eval-after-load`. Inside the dashboard,
+`e`/`g` → `org-focus-switch-export`.
 
 ## Tests
 
@@ -226,6 +261,6 @@ emacs --batch -l ert -l org-focus-switch.el -l org-focus-switch-tests.el \
 
 - Multi-file standalone scope (via `org-agenda-files`), mirroring the future
   work planned for `org-task-report`.
-- Time-of-day / per-day switch-rate decomposition.
+- Time-of-day switch-rate decomposition (per-hour, complementing per-day).
 - Distinguish "return" switches (A → B → A) from novel switches.
 - Weight edges by time as well as count.
