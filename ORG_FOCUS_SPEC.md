@@ -92,6 +92,23 @@ Aggregates every clock in the measured scope (no week filtering):
 - Show all issues per entry
 - Clickable links to navigate to entry
 
+**Task Switching section** (rendered after the breakdown tables, when the
+optional `org-focus-switch` package is on the `load-path`):
+- Provided by the standalone `org-focus-switch` package, which `org-focus`
+  consumes via `(require 'org-focus-switch nil t)` (both integration points
+  guarded by `fboundp`, so the dashboard works unchanged without it).
+- Reconstructs the chronological sequence of clock events in the measured scope
+  and reports two conclusions:
+  1. **Switch frequency** — task switches, switches per focused hour, and the
+     average focus-block length (frequent switching vs. long focus periods).
+  2. **Priority-transition graph** — a directed weighted graph of
+     `FOCUS_PRIORITY` transitions (from → to) as an adjacency matrix + a
+     frequency-ranked edge list, each edge classified as escalation /
+     de-escalation / lateral.
+- Data is attached under the `:switch` key of the dashboard data plist by
+  `org-focus--collect-subtree-data` / `org-focus--collect-global-data`.
+- See `org-focus-switch/SPEC.md` for the full contract.
+
 **By Child section** (added at the end):
 - Enumerates the direct children of the measured scope (in subtree scope, the
   child headings; in global scope, the top-level headings per file)

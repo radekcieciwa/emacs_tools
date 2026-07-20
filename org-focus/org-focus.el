@@ -68,6 +68,9 @@
 (require 'subr-x)
 (require 'button)
 (require 'time-date)
+;; Optional: adds a "Task Switching" dashboard section when available on the
+;; load-path.  Guarded so org-focus loads fine without it.
+(require 'org-focus-switch nil t)
 
 (defgroup org-focus nil
   "Focus tracking and review helpers for Org mode."
@@ -586,12 +589,23 @@ focus data plist (without its own :children, to avoid recursion)."
   (org-back-to-heading t)
   (let ((data (org-focus--collect
                (lambda (fn) (org-with-wide-buffer (org-map-entries fn nil 'tree))))))
-    (plist-put data :children (org-focus--collect-children-data))))
+    (setq data (plist-put data :children (org-focus--collect-children-data)))
+    (when (fboundp 'org-focus-switch-collect)
+      (setq data (plist-put data :switch
+                            (org-focus-switch-collect
+                             (lambda (fn)
+                               (org-with-wide-buffer (org-map-entries fn nil 'tree)))))))
+    data))
 
 (defun org-focus--collect-global-data ()
   "Collect focus data from all configured files, including per-child breakdown."
   (let ((data (org-focus--collect #'org-focus--org-files-map-entries)))
-    (plist-put data :children (org-focus--collect-children-data-global))))
+    (setq data (plist-put data :children (org-focus--collect-children-data-global)))
+    (when (fboundp 'org-focus-switch-collect)
+      (setq data (plist-put data :switch
+                            (org-focus-switch-collect
+                             #'org-focus--org-files-map-entries))))
+    data))
 
 (defun org-focus--group-rows (rows)
   "Group ROWS by heading, summing minutes and counting occurrences.
@@ -792,6 +806,9 @@ If SCOPE-LABEL is provided, show it in the header."
          "Activity" (plist-get data :by-activity) total org-focus-activity-tags)
         (org-focus--insert-table-from-hash
          "Intentionality" (plist-get data :by-intent) total org-focus-intent-tags)
+
+        (when (and (plist-get data :switch) (fboundp 'org-focus-switch-render))
+          (org-focus-switch-render (plist-get data :switch)))
 
         (when rows
           (let ((groups (org-focus--group-rows rows)))
