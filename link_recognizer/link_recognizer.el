@@ -87,22 +87,122 @@
     )
   )
 
-(defun github-repo-link-recognizer (string)
-  (if (string-match "https?:\/\/github.com\/\\([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\\)\/?" string)
-      (if-let ((repo-name (match-string 1 string)))
-          (cons string repo-name))))
+;;; GitHub ---------------------------------------------------------------------
 
-(defun github-hash-digits-recognizer (kind string)
-  (if (string-match (concat "https?:\/\/github\.com\/.*\/\\([a-zA-Z0-9_-]+\\)\/" kind "\/\\([0-9]+\\)") string)
-      (if-let ((repo-name (match-string 1 string))
-               (number (match-string 2 string)))
-          (cons string (concat repo-name " #" number)))))
+(defvar github-host-prefixes '(("github.com" . "gh")
+                               ("github.bumble.dev" . "ghe"))
+  "Alist of known GitHub hosts and the prefix used in their descriptions.")
 
-(defun github-issue-link-recognizer (string)
-  (github-hash-digits-recognizer "issues" string))
+(defun github-host-prefix (host)
+  "Description prefix for HOST, or nil when HOST is not a known GitHub host."
+  (cdr (assoc host github-host-prefixes)))
 
-(defun github-pull-link-recognizer (string)
-  (github-hash-digits-recognizer "pull" string))
+(defun github-url-parts (string)
+  "Split STRING into (PREFIX OWNER REPO PATH ANCHOR) when it is a GitHub URL.
+
+PREFIX is the short host label (see `github-host-prefixes'), PATH is
+everything after `OWNER/REPO/' with the query string and the anchor
+stripped (empty string for a repository root) and ANCHOR is the `#...'
+fragment without the hash (nil when absent).  Returns nil for URLs that
+are not hosted on a known GitHub host."
+  (when (string-match
+         "\\`https?://\\([^/?#]+\\)/\\([^/?#]+\\)/\\([^/?#]+\\)\\(?:/\\([^?#]*\\)\\)?\\(?:\\?[^#]*\\)?\\(?:#\\(.*\\)\\)?\\'"
+         string)
+    (let ((prefix (github-host-prefix (match-string 1 string)))
+          (owner (match-string 2 string))
+          (repo (match-string 3 string))
+          (path (or (match-string 4 string) ""))
+          (anchor (match-string 5 string)))
+      (if prefix (list prefix owner repo path anchor)))))
+
+(defun github-blob-label (path anchor)
+  "Label for a blob PATH like `blob/main/dir/File.swift' with line ANCHOR."
+  (let ((file (file-name-nondirectory path))
+        (lines (if (and anchor
+                        (string-match "\\`L\\([0-9]+\\)\\(?:-L\\([0-9]+\\)\\)?" anchor))
+                   (if (match-string 2 anchor)
+                       (concat (match-string 1 anchor) "-" (match-string 2 anchor))
+                     (match-string 1 anchor)))))
+    (if lines (concat file ":" lines) file)))
+
+(defun github-path-label (path anchor)
+  "Describe PATH (with ANCHOR) inside a GitHub repository.
+Returns nil for a repository root and for paths with no known shape, so
+callers fall back to the plain `PREFIX/OWNER/REPO' description."
+  (cond
+   ((string-match "\\`pull/\\([0-9]+\\)" path)
+    (concat "PR#" (match-string 1 path)))
+   ((string-match "\\`actions/runs/\\([0-9]+\\)/job/\\([0-9]+\\)" path)
+    (concat "run#" (match-string 1 path) " job#" (match-string 2 path)))
+   ((string-match "\\`actions/runs/\\([0-9]+\\)/attempts/\\([0-9]+\\)" path)
+    (concat "run#" (match-string 1 path) " (attempt " (match-string 2 path) ")"))
+   ((string-match "\\`actions/runs/\\([0-9]+\\)" path)
+    (concat "run#" (match-string 1 path)))
+   ((string-match "\\`actions/jobs/\\([0-9]+\\)" path)
+    (concat "job#" (match-string 1 path)))
+   ((string-match "\\`actions/workflows/\\([^/]+\\)" path)
+    (concat "workflow " (match-string 1 path)))
+   ((string-match "\\`actions" path) "actions")
+   ((string-match "\\`issues/\\([0-9]+\\)" path)
+    (concat "issue#" (match-string 1 path)))
+   ((string-match "\\`discussions/\\([0-9]+\\)" path)
+    (concat "discussion#" (match-string 1 path)))
+   ((string-match "\\`commits?/\\([0-9a-f]\\{7,40\\}\\)" path)
+    (concat "commit " (substring (match-string 1 path) 0 7)))
+   ((string-match "\\`compare/\\([^/]+\\)" path)
+    (concat "compare " (match-string 1 path)))
+   ((string-match "\\`releases/tag/\\([^/]+\\)" path)
+    (concat "release " (match-string 1 path)))
+   ((string-match "\\`releases" path) "releases")
+   ((string-match "\\`blob/" path) (github-blob-label path anchor))
+   ((string-match "\\`tree/\\(.+\\)" path)
+    (concat "tree " (match-string 1 path)))
+   ((string-match "\\`wiki/\\(.+\\)" path)
+    (concat "wiki " (replace-regexp-in-string "-" " " (match-string 1 path))))
+   ((string-match "\\`projects/\\([0-9]+\\)" path)
+    (concat "project#" (match-string 1 path)))
+   ((string-match "\\`milestone/\\([0-9]+\\)" path)
+    (concat "milestone#" (match-string 1 path)))))
+
+(defun github-link-recognizer (string)
+  "Recognize repository level GitHub links on github.com and GitHub Enterprise.
+Pull requests, Actions runs and jobs, issues, discussions, commits,
+compares, releases, files, trees and wiki pages get a dedicated label;
+anything else falls back to `PREFIX/OWNER/REPO'."
+  (if-let ((parts (github-url-parts string)))
+      (let* ((prefix (nth 0 parts))
+             (owner (nth 1 parts))
+             (repo (nth 2 parts))
+             (label (github-path-label (nth 3 parts) (nth 4 parts)))
+             (base (concat prefix "/" owner "/" repo)))
+        (cons string (if label (concat base "/" label) base)))))
+
+(defun github-org-link-recognizer (string)
+  "Recognize organisation level GitHub links, e.g. `/orgs/ORG/projects/3'."
+  (if-let ((parts (github-url-parts string)))
+      (let ((prefix (nth 0 parts))
+            (owner (nth 2 parts))
+            (path (nth 3 parts)))
+        (if (string-equal (nth 1 parts) "orgs")
+            (cons string
+                  (if (string-match "\\`projects/\\([0-9]+\\)" path)
+                      (concat prefix "/" owner "/project#" (match-string 1 path))
+                    (concat prefix "/" owner)))))))
+
+(defun github-owner-link-recognizer (string)
+  "Recognize a bare GitHub owner (user or organisation) page."
+  (if (string-match "\\`https?://\\([^/?#]+\\)/\\([^/?#]+\\)/?\\(?:[?#].*\\)?\\'" string)
+      (let ((prefix (github-host-prefix (match-string 1 string)))
+            (owner (match-string 2 string)))
+        (if prefix (cons string (concat prefix "/" owner))))))
+
+(defun github-gist-link-recognizer (string)
+  "Recognize a gist link, keeping the owner and a short gist id."
+  (if (string-match "\\`https?://gist\\.github\\.com/\\([a-zA-Z0-9_-]+\\)/\\([0-9a-f]+\\)" string)
+      (let ((owner (match-string 1 string))
+            (gist-id (match-string 2 string)))
+        (cons string (concat "gist/" owner "/"
+                             (substring gist-id 0 (min 7 (length gist-id))))))))
 
 (defun teamcity-link-recognizer (string)
   (if (string-match "https?:\/\/mobile-ci\.bumble\.dev\/buildConfiguration\/\\([a-zA-Z0-9_]+\\)\/\\([0-9]+\\)" string)
@@ -111,11 +211,14 @@
           (cons string (concat "TeamCity/" build-type "/" build-id)))))
 
 (defun github-enterprise-pull-link-recognizer (string)
-  (if (string-match "https?:\/\/github\.bumble\.dev\/\\([a-zA-Z0-9_-]+\\)\/\\([a-zA-Z0-9_-]+\\)\/pull\/\\([0-9]+\\)" string)
-      (if-let ((org-name (match-string 1 string))
-               (repo-name (match-string 2 string))
-               (number (match-string 3 string)))
-          (cons string (concat "ghe/" org-name "/" repo-name "/PR#" number)))))
+  "Recognize GitHub Enterprise pull requests only.
+Superseded by `github-link-recognizer', which returns the same
+description for these URLs and also handles github.com and every other
+GitHub URL shape.  Kept as a narrow entry point."
+  (if-let ((parts (github-url-parts string)))
+      (if (and (string-equal (nth 0 parts) "ghe")
+               (string-match "\\`pull/[0-9]+" (nth 3 parts)))
+          (github-link-recognizer string))))
 
 (defvar org-link-recognizers '(
      teamcity-link-recognizer
@@ -127,10 +230,10 @@
      qaapi-link-recognizer
      badoo-jira-wiki-link-recognizer
      mobiledoc-link-recognizer
-     github-enterprise-pull-link-recognizer
-     github-pull-link-recognizer
-     github-issue-link-recognizer
-     github-repo-link-recognizer
+     github-gist-link-recognizer
+     github-org-link-recognizer
+     github-link-recognizer
+     github-owner-link-recognizer
 ))
 
 (defun find-recognizer (value recognizers)
