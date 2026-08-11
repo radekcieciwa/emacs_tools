@@ -141,6 +141,37 @@ The first element is treated as the \"urgent\" level for warnings."
   :type 'float
   :group 'org-focus)
 
+;;;; Markers (expected values)
+
+;; The dashboard's "Markers" section reports each of these as a *delta* from
+;; the expected value, not as an absolute number.  A marker is satisfied when
+;; the delta points the right way (up for clocked/investment/planned, down for
+;; switching).
+
+(defcustom org-focus-expected-hours-per-day 7.0
+  "Expected clocked hours per day with any clocked time in scope.
+The clocked-time marker compares the scope's total against this value
+multiplied by the number of distinct days that carry clocks."
+  :type 'float
+  :group 'org-focus)
+
+(defcustom org-focus-expected-investment-ratio 0.10
+  "Expected share of clocked time spent on investment work."
+  :type 'float
+  :group 'org-focus)
+
+(defcustom org-focus-expected-switches-per-hour 2.5
+  "Expected upper bound for task switches per focused hour.
+Requires the optional `org-focus-switch' package; without it the marker
+reports as unavailable."
+  :type 'float
+  :group 'org-focus)
+
+(defcustom org-focus-expected-planned-ratio 0.75
+  "Expected lower bound for the share of clocked time tagged as planned."
+  :type 'float
+  :group 'org-focus)
+
 ;;;; Scanning and behaviour
 
 (defcustom org-focus-files nil
@@ -337,36 +368,73 @@ Open clocks count as now."
             (setq latest (current-time))))))
       latest)))
 
+(defun org-focus--map-own-clock-lines (fn)
+  "Call FN with each CLOCK line of the current entry, as a string.
+Clock lines belonging to child headings are not visited."
+  (save-excursion
+    (org-back-to-heading t)
+    (let* ((current-level (org-current-level))
+           (heading-end (progn (end-of-line) (point)))
+           (child-start (save-excursion
+                          (forward-line 1)
+                          (and (re-search-forward "^\\*+ " nil t)
+                               (let ((line-level (1- (length (match-string 0)))))
+                                 (when (<= line-level current-level)
+                                   (match-beginning 0)))))))
+      (goto-char heading-end)
+      (forward-line 1)
+      (while (and (< (point) (point-max))
+                  (or (not child-start) (< (point) child-start)))
+        (when (looking-at "^[ \t]*CLOCK:")
+          (funcall fn (buffer-substring (line-beginning-position)
+                                        (line-end-position))))
+        (forward-line 1)))))
+
+(defun org-focus--clock-line-minutes (line)
+  "Return the minutes recorded on clock LINE, or nil for an open clock."
+  (when (string-match "=>[ \t]+\\([0-9]+\\):\\([0-9]+\\)" line)
+    (+ (* 60 (string-to-number (match-string 1 line)))
+       (string-to-number (match-string 2 line)))))
+
+(defun org-focus--clock-line-date (line)
+  "Return the start date of clock LINE as \"YYYY-MM-DD\", or nil."
+  (when (string-match
+         "CLOCK:[ \t]*\\[\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\)"
+         line)
+    (match-string 1 line)))
+
 (defun org-focus--sum-clocks-for-entry ()
   "Sum all clock minutes in the current entry (excluding child headings)."
   (let ((total 0))
-    (save-excursion
-      (org-back-to-heading t)
-      (let* ((current-level (org-current-level))
-             (heading-end (progn (end-of-line) (point)))
-             (child-start (save-excursion
-                            (forward-line 1)
-                            (and (re-search-forward "^\\*+ " nil t)
-                                 (let ((line-level (1- (length (match-string 0)))))
-                                   (when (<= line-level current-level)
-                                     (match-beginning 0)))))))
-        (goto-char heading-end)
-        (forward-line 1)
-        (while (and (< (point) (point-max))
-                    (or (not child-start) (< (point) child-start)))
-          (when (looking-at "^[ \t]*CLOCK:")
-            (let ((line (buffer-substring (line-beginning-position) (line-end-position))))
-              (when (string-match "=>[ \t]+\\([0-9]+\\):\\([0-9]+\\)" line)
-                (let ((hours (string-to-number (match-string 1 line)))
-                      (mins (string-to-number (match-string 2 line))))
-                  (setq total (+ total (* 60 hours) mins))))))
-          (forward-line 1))))
+    (org-focus--map-own-clock-lines
+     (lambda (line)
+       (let ((minutes (org-focus--clock-line-minutes line)))
+         (when minutes (cl-incf total minutes)))))
     total))
+
+(defun org-focus--clock-days-for-entry ()
+  "Return the current entry's own clocks as an alist of (DATE . MINUTES).
+DATE is a \"YYYY-MM-DD\" string.  Clocks without a parsable start date
+are omitted, so the alist may sum to less than
+`org-focus--sum-clocks-for-entry'."
+  (let (days)
+    (org-focus--map-own-clock-lines
+     (lambda (line)
+       (let ((minutes (org-focus--clock-line-minutes line))
+             (date (org-focus--clock-line-date line)))
+         (when (and minutes date)
+           (let ((cell (assoc date days)))
+             (if cell
+                 (setcdr cell (+ (cdr cell) minutes))
+               (push (cons date minutes) days)))))))
+    (nreverse days)))
 
 (defun org-focus--collect-clocks-for-entry ()
   "Collect clock minutes and metadata snapshot for the current entry.
-Returns a plist with :minutes and metadata fields."
+Returns a plist with :minutes, :days (an alist of (DATE . MINUTES)) and
+metadata fields."
   (list :minutes (org-focus--sum-clocks-for-entry)
+        :days (org-focus--clock-days-for-entry)
         :tags (org-focus--all-tags-at-point)
         :priority (org-focus--get-priority)
         :todo (org-get-todo-state)
@@ -453,6 +521,7 @@ task plists."
         (by-activity (make-hash-table :test #'equal))
         (by-intent (make-hash-table :test #'equal))
         (by-priority (make-hash-table :test #'equal))
+        (by-day (make-hash-table :test #'equal))
         (invest-minutes 0)
         (known-metadata-minutes 0)
         (total-minutes 0))
@@ -472,6 +541,8 @@ task plists."
           (puthash intent (+ minutes (gethash intent by-intent 0)) by-intent))
         (when priority
           (puthash priority (+ minutes (gethash priority by-priority 0)) by-priority))
+        (dolist (day (plist-get row :days))
+          (puthash (car day) (+ (cdr day) (gethash (car day) by-day 0)) by-day))
         (when (member org-focus-invest-tag tags)
           (cl-incf invest-minutes minutes))
         (when (and domain activity intent)
@@ -486,7 +557,8 @@ task plists."
           :by-domain by-domain
           :by-activity by-activity
           :by-intent by-intent
-          :by-priority by-priority)))
+          :by-priority by-priority
+          :by-day by-day)))
 
 (defun org-focus--collect (map-fn)
   "Collect focus data over a scope and return the dashboard data plist.
@@ -718,6 +790,90 @@ splits) in minified, hours-only form.  The child heading is clickable."
     (insert suffix))
   (insert "\n"))
 
+;;;; Markers
+
+(defun org-focus--hash-get (table key)
+  "Return KEY's value in TABLE, or 0 when TABLE is not a hash table."
+  (if (hash-table-p table) (gethash key table 0) 0))
+
+(defun org-focus--clocked-days (data)
+  "Return the number of distinct days carrying clocked time in DATA."
+  (let ((by-day (plist-get data :by-day)))
+    (if (hash-table-p by-day) (hash-table-count by-day) 0)))
+
+(defun org-focus--marker-rows (data)
+  "Return the marker rows for DATA, each as a plist.
+
+A row is (:label L :unit U :delta D :higher-better B), where D is the
+signed difference between the measured value and its expected value, or
+nil when the scope carries no data for that marker.  The units are
+`hours' (absolute hours), `points' (percentage points) and `rate'
+\(switches per focused hour)."
+  (let* ((total (or (plist-get data :total) 0))
+         (days (org-focus--clocked-days data))
+         (invest (or (plist-get data :invest) 0))
+         (plan (org-focus--hash-get (plist-get data :by-intent) "plan"))
+         (switch (plist-get data :switch))
+         (switch-rate (and switch
+                           (> (or (plist-get switch :events) 0) 0)
+                           (> (or (plist-get switch :total-minutes) 0) 0)
+                           (plist-get switch :switches-per-hour))))
+    (list
+     (list :label (format "Clocked (%.1fh/d)" org-focus-expected-hours-per-day)
+           :unit 'hours
+           :delta (and (> days 0)
+                       (- (/ total 60.0)
+                          (* days org-focus-expected-hours-per-day)))
+           :higher-better t)
+     (list :label (format "Investment (%.0f%%)"
+                          (* 100 org-focus-expected-investment-ratio))
+           :unit 'points
+           :delta (and (> total 0)
+                       (* 100 (- (/ (float invest) total)
+                                 org-focus-expected-investment-ratio)))
+           :higher-better t)
+     (list :label (format "Switching (%.1f/h)" org-focus-expected-switches-per-hour)
+           :unit 'rate
+           :delta (and switch-rate
+                       (- switch-rate org-focus-expected-switches-per-hour))
+           :higher-better nil)
+     (list :label (format "Planned (%.0f%%)"
+                          (* 100 org-focus-expected-planned-ratio))
+           :unit 'points
+           :delta (and (> total 0)
+                       (* 100 (- (/ (float plan) total)
+                                 org-focus-expected-planned-ratio)))
+           :higher-better t))))
+
+(defun org-focus--format-delta (delta unit)
+  "Format DELTA in UNIT as a signed string, or \"n/a\" when DELTA is nil."
+  (if (null delta)
+      "n/a"
+    (pcase unit
+      ('hours (format "%+.1fh" delta))
+      ('points (format "%+.0fpp" delta))
+      ('rate (format "%+.1f/h" delta))
+      (_ (format "%+.1f" delta)))))
+
+(defun org-focus--marker-met-p (row)
+  "Return non-nil when marker ROW's delta points in the desired direction."
+  (let ((delta (plist-get row :delta)))
+    (and delta
+         (if (plist-get row :higher-better) (>= delta 0) (<= delta 0)))))
+
+(defun org-focus--insert-markers (data)
+  "Insert the Markers section for DATA: one delta line per marker."
+  (org-focus--insert-section-title "Markers (delta vs expected)")
+  (dolist (row (org-focus--marker-rows data))
+    (let ((delta (plist-get row :delta)))
+      (org-focus--insert-kv-line
+       (plist-get row :label)
+       (org-focus--format-delta delta (plist-get row :unit))
+       (cond ((null delta) 'shadow)
+             ((org-focus--marker-met-p row) 'success)
+             (t 'warning)))))
+  (insert "\n"))
+
 (defun org-focus--warning-lines (data)
   "Return a list of warning strings derived from DATA."
   (let* ((total (plist-get data :total))
@@ -799,6 +955,8 @@ If SCOPE-LABEL is provided, show it in the header."
                                        'warning
                                      'success))
         (insert "\n")
+
+        (org-focus--insert-markers data)
 
         (org-focus--insert-table-from-hash
          "Domain" (plist-get data :by-domain) total org-focus-domain-tags)
@@ -961,6 +1119,8 @@ Commands:
 Dashboard shows:
 - Total clocked time (no week filtering)
 - Metadata completeness and investment ratio
+- Markers: deltas from the expected clocked hours per day, investment
+  ratio, switch rate and planned ratio
 - Breakdown by domain/activity/intentionality
 - Time by priority and urgent (P0) status (active count, stale tasks)
 - Clickable entries with clocks

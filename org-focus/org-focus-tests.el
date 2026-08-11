@@ -224,6 +224,149 @@
     (goto-char (point-min))
     (should (null (org-focus--collect-children-data)))))
 
+;;; Per-day clock collection
+
+(ert-deftest org-focus-test-clock-days-for-entry ()
+  "An entry's own clocks are bucketed by start date."
+  (with-temp-buffer
+    (insert "* TODO A :prod:build:plan:\n"
+            "CLOCK: [2026-06-08 Mon 09:00]--[2026-06-08 Mon 11:00] =>  2:00\n"
+            "CLOCK: [2026-06-08 Mon 13:00]--[2026-06-08 Mon 13:30] =>  0:30\n"
+            "CLOCK: [2026-06-09 Tue 09:00]--[2026-06-09 Tue 10:00] =>  1:00\n")
+    (org-mode)
+    (goto-char (point-min))
+    (org-next-visible-heading 0)
+    (should (equal '(("2026-06-08" . 150) ("2026-06-09" . 60))
+                   (org-focus--clock-days-for-entry)))
+    (should (= 210 (org-focus--sum-clocks-for-entry)))))
+
+(ert-deftest org-focus-test-clock-days-ignores-open-clock ()
+  "An open clock contributes neither minutes nor a day."
+  (with-temp-buffer
+    (insert "* TODO A :prod:build:plan:\n"
+            "CLOCK: [2026-06-08 Mon 09:00]\n")
+    (org-mode)
+    (goto-char (point-min))
+    (org-next-visible-heading 0)
+    (should (null (org-focus--clock-days-for-entry)))
+    (should (= 0 (org-focus--sum-clocks-for-entry)))))
+
+(ert-deftest org-focus-test-by-day-aggregates-across-entries ()
+  "Days from different entries are merged into the :by-day table."
+  (with-temp-buffer
+    (insert "* Week\n"
+            "** TODO A :prod:build:plan:\n"
+            "CLOCK: [2026-06-08 Mon 09:00]--[2026-06-08 Mon 11:00] =>  2:00\n"
+            "** TODO B :team:help:unplan:\n"
+            "CLOCK: [2026-06-08 Mon 11:00]--[2026-06-08 Mon 12:00] =>  1:00\n"
+            "CLOCK: [2026-06-09 Tue 09:00]--[2026-06-09 Tue 10:00] =>  1:00\n")
+    (org-mode)
+    (goto-char (point-min))
+    (let* ((data (org-focus--collect
+                  (lambda (fn) (org-map-entries fn nil 'tree))))
+           (by-day (plist-get data :by-day)))
+      (should (= 2 (hash-table-count by-day)))
+      (should (= 180 (gethash "2026-06-08" by-day)))
+      (should (= 60 (gethash "2026-06-09" by-day)))
+      (should (= 2 (org-focus--clocked-days data))))))
+
+;;; Markers: org-focus--marker-rows
+
+(defun org-focus-tests--marker-data (&rest overrides)
+  "Build a baseline marker data plist, merging OVERRIDES on top.
+Two clocked days, 480 minutes total, 48 investment, 400 planned."
+  (let* ((by-day (make-hash-table :test #'equal))
+         (by-intent (make-hash-table :test #'equal))
+         (base (list :total 480
+                     :invest 48
+                     :by-day by-day
+                     :by-intent by-intent
+                     :switch (list :events 10
+                                   :total-minutes 480.0
+                                   :switches-per-hour 2.0))))
+    (puthash "2026-06-08" 240 by-day)
+    (puthash "2026-06-09" 240 by-day)
+    (puthash "plan" 400 by-intent)
+    (while overrides
+      (setq base (plist-put base (pop overrides) (pop overrides))))
+    base))
+
+(defun org-focus-tests--marker (data label)
+  "Return the marker row from DATA whose label starts with LABEL."
+  (seq-find (lambda (row) (string-prefix-p label (plist-get row :label)))
+            (org-focus--marker-rows data)))
+
+(ert-deftest org-focus-test-marker-clocked-delta ()
+  "Clocked time is compared against expected hours times clocked days."
+  (let* ((org-focus-expected-hours-per-day 7.0)
+         (row (org-focus-tests--marker (org-focus-tests--marker-data) "Clocked")))
+    ;; 8h clocked over 2 days, expected 14h.
+    (should (string= "Clocked (7.0h/d)" (plist-get row :label)))
+    (should (< (abs (- -6.0 (plist-get row :delta))) 0.001))
+    (should (not (org-focus--marker-met-p row)))
+    (should (string= "-6.0h" (org-focus--format-delta (plist-get row :delta) 'hours)))))
+
+(ert-deftest org-focus-test-marker-clocked-above-expected ()
+  "A scope above the expected daily hours reports a positive, met delta."
+  (let* ((org-focus-expected-hours-per-day 3.0)
+         (row (org-focus-tests--marker (org-focus-tests--marker-data) "Clocked")))
+    (should (< (abs (- 2.0 (plist-get row :delta))) 0.001))
+    (should (org-focus--marker-met-p row))))
+
+(ert-deftest org-focus-test-marker-investment-delta ()
+  "Investment is reported as percentage points from the expected ratio."
+  (let* ((org-focus-expected-investment-ratio 0.10)
+         (row (org-focus-tests--marker (org-focus-tests--marker-data) "Investment")))
+    ;; 48/480 = 10%, exactly on target.
+    (should (< (abs (plist-get row :delta)) 0.001))
+    (should (org-focus--marker-met-p row))
+    (let ((low (org-focus-tests--marker
+                (org-focus-tests--marker-data :invest 24) "Investment")))
+      (should (< (abs (- -5.0 (plist-get low :delta))) 0.001))
+      (should (not (org-focus--marker-met-p low))))))
+
+(ert-deftest org-focus-test-marker-switching-delta ()
+  "Switching is met when the rate is at or below the expected bound."
+  (let* ((org-focus-expected-switches-per-hour 2.5)
+         (row (org-focus-tests--marker (org-focus-tests--marker-data) "Switching")))
+    (should (< (abs (- -0.5 (plist-get row :delta))) 0.001))
+    (should (org-focus--marker-met-p row))
+    (let ((high (org-focus-tests--marker
+                 (org-focus-tests--marker-data
+                  :switch (list :events 10 :total-minutes 480.0
+                                :switches-per-hour 4.0))
+                 "Switching")))
+      (should (< (abs (- 1.5 (plist-get high :delta))) 0.001))
+      (should (not (org-focus--marker-met-p high))))))
+
+(ert-deftest org-focus-test-marker-planned-delta ()
+  "Planned work is reported as percentage points from the expected ratio."
+  (let* ((org-focus-expected-planned-ratio 0.75)
+         (row (org-focus-tests--marker (org-focus-tests--marker-data) "Planned")))
+    ;; 400/480 = 83%, 8pp above target.
+    (should (< (abs (- 8.333 (plist-get row :delta))) 0.01))
+    (should (org-focus--marker-met-p row))
+    (should (string= "+8pp" (org-focus--format-delta (plist-get row :delta) 'points)))))
+
+(ert-deftest org-focus-test-marker-rows-unavailable ()
+  "Markers with no data in scope report a nil delta and are not met."
+  (let* ((data (list :total 0
+                     :invest 0
+                     :by-day (make-hash-table :test #'equal)
+                     :by-intent (make-hash-table :test #'equal)))
+         (rows (org-focus--marker-rows data)))
+    (should (= 4 (length rows)))
+    (should (cl-every (lambda (row) (null (plist-get row :delta))) rows))
+    (should (cl-notany #'org-focus--marker-met-p rows))
+    (should (string= "n/a" (org-focus--format-delta nil 'hours)))))
+
+(ert-deftest org-focus-test-marker-switching-without-switch-package ()
+  "Without :switch data the switching marker is unavailable, others are not."
+  (let* ((data (org-focus-tests--marker-data :switch nil))
+         (switching (org-focus-tests--marker data "Switching")))
+    (should (null (plist-get switching :delta)))
+    (should (plist-get (org-focus-tests--marker data "Planned") :delta))))
+
 ;;; Warning generation: org-focus--warning-lines
 
 (defun org-focus-tests--data (&rest overrides)

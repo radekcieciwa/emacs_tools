@@ -40,6 +40,11 @@ org-focus-unplanned-warning-ratio    0.30  ; warn if unplan time ratio > N
 org-focus-sync-warning-ratio         0.25  ; warn if sync time ratio > N
 org-focus-help-warning-ratio         0.30  ; warn if help time ratio > N
 
+org-focus-expected-hours-per-day       7.0   ; marker: expected clocked hours per clocked day
+org-focus-expected-investment-ratio    0.10  ; marker: expected invest share of clocked time
+org-focus-expected-switches-per-hour   2.5   ; marker: expected max switches per focused hour
+org-focus-expected-planned-ratio       0.75  ; marker: expected plan share of clocked time
+
 org-focus-current-file-only          nil   ; if true, scan only current buffer's file
 org-focus-enforce-on-clock-in        nil   ; if true, prompt to fix metadata on clock-in
 org-focus-prompt-for-invest          nil   ; if true, ask for invest tag on clock-in
@@ -66,6 +71,30 @@ Aggregates every clock in the measured scope (no week filtering):
 - Total clocked hours
 - Hours with complete metadata (domain + activity + intent)
 - Hours with invest tag
+
+**Markers section** (immediately after the summary):
+- Four markers, each rendered as a single line showing **only the signed delta
+  from its expected value** — never the absolute measurement, which the rest of
+  the dashboard already carries.
+- The markers, their expected values and their delta units:
+
+  | Marker     | Expected value                          | Delta unit                    | Met when |
+  |------------|-----------------------------------------|-------------------------------|----------|
+  | Clocked    | `org-focus-expected-hours-per-day` × clocked days | hours (`+1.5h`)     | ≥ 0      |
+  | Investment | `org-focus-expected-investment-ratio`   | percentage points (`-4pp`)    | ≥ 0      |
+  | Switching  | `org-focus-expected-switches-per-hour`  | switches/focused-h (`-0.6/h`) | ≤ 0      |
+  | Planned    | `org-focus-expected-planned-ratio`      | percentage points (`+8pp`)    | ≥ 0      |
+
+- "Clocked days" is the number of distinct calendar dates carrying clocked time
+  in the scope (`:by-day`), so the clocked expectation scales with the measured
+  period rather than assuming a fixed week length.
+- A met marker is rendered with the `success` face, an unmet one with `warning`.
+- A marker whose input is missing (no clocked days, no clocked time, or no
+  `:switch` data because `org-focus-switch` is absent) renders `n/a` with the
+  `shadow` face.
+- Computed by the pure function `org-focus--marker-rows`, which returns plists
+  `(:label :unit :delta :higher-better)` with `:delta` nil when unavailable;
+  rendering lives in `org-focus--insert-markers`.
 
 **Breakdown tables** (hours and %):
 - Domain (prod, team, org)
@@ -153,6 +182,7 @@ Other:    i=invest
 
 ```elisp
 (:minutes N
+ :days [alist of (DATE . MINUTES)]      ; DATE is "YYYY-MM-DD"; dateless clocks omitted
  :tags [list]
  :priority "P0"|"P1"|"P2"|nil
  :todo state|nil
@@ -179,6 +209,7 @@ so the plist shape is identical regardless of scope:
  :by-activity {hash: tag → minutes}
  :by-intent {hash: tag → minutes}
  :by-priority {hash: level → minutes}   ; [deprecated/unproven] no longer rendered
+ :by-day {hash: "YYYY-MM-DD" → minutes} ; clocked days; its count drives the Clocked marker
  :children [list])                      ; per-direct-child decomposition (:heading :marker :file :data)
 ```
 
@@ -200,6 +231,10 @@ subtree.
 ### Clock time collection
 - For each leaf entry, sum `CLOCK: ... => H:MM` durations on that entry only
   (`org-focus--sum-clocks-for-entry`); child headings are not double-counted.
+- The same clock lines are bucketed by start date
+  (`org-focus--clock-days-for-entry`) and merged into the scope-wide `:by-day`
+  table during aggregation. Both walk the entry's own clock lines via
+  `org-focus--map-own-clock-lines`.
 - No week filtering: every matching clock in the entry contributes.
 
 ### Week boundaries (helper only)

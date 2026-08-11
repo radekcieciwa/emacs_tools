@@ -15,10 +15,11 @@ org-focus/
 
 ## What it does
 
-- **Dashboard** (`C-c f d`) — sums every clock in the measured scope and breaks
-  it down by domain / activity / intentionality, lists clocked entries (merged
-  by heading, sorted by duration), warns on metadata/ratio issues, and ends with
-  a compact **By Child** table decomposing each direct child subtree.
+- **Dashboard** (`C-c f d`) — sums every clock in the measured scope, reports the
+  four **markers** as deltas from their expected values, breaks the time down by
+  domain / activity / intentionality, lists clocked entries (merged by heading,
+  sorted by duration), warns on metadata/ratio issues, and ends with a compact
+  **By Child** table decomposing each direct child subtree.
 - **Lint** (`C-c f l`) — lists entries with missing or conflicting metadata.
 - **Fix** (`C-c f f`) — interactively set the metadata axes on the current entry.
 
@@ -26,6 +27,34 @@ There is **no week filtering**. The dashboard measures whatever scope you point
 it at — put the cursor on a `Week` heading, a `Day` heading, or a project, and
 it sums the clocks beneath it. Only leaf (childless) entries are measured;
 parent headings are treated as pure structure.
+
+## Markers
+
+Right after the summary the dashboard shows four markers. Each one prints
+**only the delta from its expected value** — signed, green when the marker is
+met, yellow when it is not, and `n/a` when the scope has no data for it.
+
+| Marker       | Expected                 | Delta unit                   | Met when |
+|--------------|--------------------------|------------------------------|----------|
+| Clocked      | 7.0h per clocked day     | hours (`+1.5h`)              | ≥ 0      |
+| Investment   | 10% of clocked time      | percentage points (`-4pp`)   | ≥ 0      |
+| Switching    | 2.5 switches/focused-h   | switches per hour (`-0.6/h`) | ≤ 0      |
+| Planned      | 75% of clocked time      | percentage points (`+8pp`)   | ≥ 0      |
+
+The clocked expectation scales with the number of **distinct days that carry
+clocks** in the scope, so a week with three clocked days expects 21h. Days with
+no clocks at all are invisible to the scope and do not count.
+
+The switching marker needs the optional `org-focus-switch` package; without it
+that row reads `n/a`.
+
+```
+Markers (delta vs expected)
+Clocked (7.0h/d):  -6.0h
+Investment (10%):  +2pp
+Switching (2.5/h): -2.2/h
+Planned (75%):     -12pp
+```
 
 ## Metadata taxonomy
 
@@ -102,6 +131,10 @@ Both `dashboard` and `lint` also have explicit `-subtree` / `-global` commands.
 | `org-focus-unplanned-warning-ratio` | 0.30                | Warn if unplanned ratio exceeds this          |
 | `org-focus-sync-warning-ratio`      | 0.25                | Warn if sync ratio exceeds this               |
 | `org-focus-help-warning-ratio`      | 0.30                | Warn if help ratio exceeds this               |
+| `org-focus-expected-hours-per-day`  | 7.0                 | Marker: expected clocked hours per day        |
+| `org-focus-expected-investment-ratio` | 0.10              | Marker: expected investment share             |
+| `org-focus-expected-switches-per-hour` | 2.5              | Marker: expected max switches/focused-h       |
+| `org-focus-expected-planned-ratio`  | 0.75                | Marker: expected planned share                |
 | `org-focus-files`                   | nil                 | Files to scan (nil → `org-agenda-files`)      |
 | `org-focus-current-file-only`       | nil                 | Scan only the current buffer's file           |
 | `org-focus-enforce-on-clock-in`     | nil                 | Auto-fix metadata on clock-in                 |
