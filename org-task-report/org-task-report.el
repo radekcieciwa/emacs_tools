@@ -16,13 +16,22 @@
 ;; merged.  They appear as two separate dated blocks in the report.
 ;;
 ;; Entry point: M-x org-task-report, bound to C-c t r in Org buffers.
-;; The report itself is an Org-mode buffer.
+;;
+;; The report is presented in one of two styles, chosen by
+;; `org-task-report-presentation':
+;; - `org'       an Org-mode buffer of dated headings with `file:' links.
+;; - `dashboard' a read-only rendered dashboard in the style of the org-focus
+;;               dashboard: a summary block, then one dated block per entry
+;;               with a clickable source button.
+;; `org-task-report-toggle-presentation' (C-c t t in Org buffers, `t' inside a
+;; dashboard report) flips between them and re-renders in place.
 
 ;;; Code:
 
 (require 'org)
 (require 'org-clock)
 (require 'subr-x)
+(require 'button)
 
 (defgroup org-task-report nil
   "Aggregate same-titled org entries into a per-day report."
@@ -31,6 +40,27 @@
 (defcustom org-task-report-buffer-name "*Org Task Report*"
   "Name of the report buffer."
   :type 'string
+  :group 'org-task-report)
+
+(defcustom org-task-report-presentation 'org
+  "How `org-task-report' presents its report.
+
+`org'
+    An Org-mode buffer: one dated heading per entry, each an Org `file:'
+    link back to the source, followed by the entry's note.  Editable, and
+    links are followed with RET or \\[org-open-at-point].
+
+`dashboard'
+    A read-only rendered buffer in the style of the org-focus dashboard: a
+    summary block (entries, days, total and average time), then one dated
+    block per entry whose header is a clickable button back to the source
+    and carries a bar scaled to the longest entry.
+
+Both are built from the same collected rows, so switching only changes the
+rendering.  `org-task-report-toggle-presentation' flips between them and
+re-renders the current report."
+  :type '(choice (const :tag "Org-mode buffer" org)
+                 (const :tag "Rendered dashboard" dashboard))
   :group 'org-task-report)
 
 ;;;; Title handling
@@ -175,11 +205,19 @@ Each row is a plist with :date :minutes :note :file :line."
           ((= m 0) (format "%dh" h))
           (t (format "%dh %02dm" h m)))))
 
-;;;; Report
+(defun org-task-report--total-minutes (rows)
+  "Return the total clocked minutes across ROWS."
+  (apply #'+ (mapcar (lambda (r) (plist-get r :minutes)) rows)))
 
-(defun org-task-report--render (title rows)
+(defun org-task-report--dates (rows)
+  "Return the distinct dates present in ROWS, dateless rows ignored."
+  (delete-dups (delq nil (mapcar (lambda (r) (plist-get r :date)) rows))))
+
+;;;; Report: Org presentation
+
+(defun org-task-report--render-org (title rows)
   "Insert an Org report for TITLE from ROWS into the current buffer."
-  (let ((total (apply #'+ (mapcar (lambda (r) (plist-get r :minutes)) rows))))
+  (let ((total (org-task-report--total-minutes rows)))
     (insert (format "#+TITLE: %s\n\n" title))
     (insert (format "%d entr%s · Total: %s\n"
                     (length rows)
@@ -204,10 +242,129 @@ The line number is a snapshot taken when the report was built."
       (format "[[file:%s::%d][%s]]" file line label)
     label))
 
+;;;; Report: dashboard presentation
+
+(defvar org-task-report-dashboard-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "t") #'org-task-report-toggle-presentation)
+    map)
+  "Keymap active in a dashboard-presented report buffer.")
+
+(defun org-task-report--insert-section-title (title)
+  "Insert TITLE as a section header."
+  (insert (propertize title 'face 'bold) "\n"))
+
+(defun org-task-report--insert-kv-line (label value)
+  "Insert LABEL and VALUE as an aligned key/value line."
+  (insert (format "%-18s %s\n" (concat label ":") value)))
+
+(defun org-task-report--goto-source (file line)
+  "Visit FILE and put point on LINE, revealing the entry when in Org mode.
+LINE is the snapshot taken when the report was built, so editing the source
+afterwards may drift it."
+  (find-file file)
+  (goto-char (point-min))
+  (forward-line (1- line))
+  (when (derived-mode-p 'org-mode)
+    (org-fold-show-context)
+    (org-fold-show-entry)))
+
+(defun org-task-report--insert-button-line (label file line &optional suffix)
+  "Insert clickable LABEL jumping to LINE in FILE, with optional SUFFIX.
+With no FILE (a report built from a buffer not visiting a file) LABEL is
+inserted as plain text, mirroring the Org renderer's link fallback."
+  (if file
+      (insert-text-button label
+                          'action (lambda (_) (org-task-report--goto-source file line))
+                          'follow-link t)
+    (insert label))
+  (when suffix
+    (insert suffix))
+  (insert "\n"))
+
+(defun org-task-report--bar (minutes max-minutes)
+  "Return a bar of block characters for MINUTES scaled to MAX-MINUTES."
+  (make-string (round (* 16.0 (/ (float minutes) (max 1 max-minutes)))) ?█))
+
+(defun org-task-report--indent (text prefix)
+  "Return TEXT with PREFIX prepended to each of its lines."
+  (replace-regexp-in-string "^" prefix text))
+
+(defun org-task-report--render-dashboard (title rows)
+  "Insert a rendered dashboard for TITLE from ROWS into the current buffer.
+Mirrors the org-focus dashboard: a large header, a summary block, then one
+dated block per entry whose header line is a button back to the source."
+  (special-mode)
+  (use-local-map (make-composed-keymap org-task-report-dashboard-mode-map
+                                       (current-local-map)))
+  (let* ((total (org-task-report--total-minutes rows))
+         (days (length (org-task-report--dates rows)))
+         (max-minutes (apply #'max 1 (mapcar (lambda (r) (plist-get r :minutes)) rows))))
+    (insert (propertize "Org Task Report" 'face '(:height 1.3 :weight bold)))
+    (insert (format " (%s)\n\n" title))
+
+    (org-task-report--insert-section-title "Summary")
+    (org-task-report--insert-kv-line "Entries" (number-to-string (length rows)))
+    (org-task-report--insert-kv-line "Days" (number-to-string days))
+    (org-task-report--insert-kv-line "Total clocked"
+                                     (org-task-report--format-hm total))
+    (org-task-report--insert-kv-line "Average per day"
+                                     (org-task-report--format-hm
+                                      (if (> days 0) (/ total days) 0)))
+    (insert "\n")
+
+    (org-task-report--insert-section-title (format "Entries (%d)" (length rows)))
+    (if (null rows)
+        (insert "No matching entries.\n")
+      (dolist (row rows)
+        (let ((note (plist-get row :note))
+              (minutes (plist-get row :minutes)))
+          (insert "\n")
+          (org-task-report--insert-button-line
+           ;; Padded to a fixed width so the duration column stays aligned
+           ;; when a dateless row widens the label.
+           (format "%-15s" (or (plist-get row :date) "(no clock info)"))
+           (plist-get row :file)
+           (plist-get row :line)
+           (format "  %-8s %s"
+                   (org-task-report--format-hm minutes)
+                   (org-task-report--bar minutes max-minutes)))
+          (if note
+              (insert (org-task-report--indent note "  ") "\n")
+            (insert (propertize "  (no notes)\n" 'face 'shadow))))))
+    (insert (propertize "\nPress t for the Org-mode presentation.\n"
+                        'face 'shadow))))
+
+;;;; Report
+
+(defvar-local org-task-report--data nil
+  "Cons of (TITLE . ROWS) backing the current report buffer.
+Kept so `org-task-report-toggle-presentation' can re-render the same data
+in the other presentation without rescanning the source buffer.")
+
+(defun org-task-report--render-into-buffer (title rows)
+  "Render TITLE and ROWS into the report buffer and return that buffer.
+The presentation is chosen by `org-task-report-presentation'.  The data is
+stashed buffer-locally after the major mode is set, since switching modes
+clears buffer-local variables."
+  (let ((buf (get-buffer-create org-task-report-buffer-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (pcase org-task-report-presentation
+          ('dashboard (org-task-report--render-dashboard title rows))
+          ('org (org-task-report--render-org title rows)
+                (org-mode))
+          (other (user-error "Unknown `org-task-report-presentation': %s" other)))
+        (setq org-task-report--data (cons title rows))
+        (goto-char (point-min))))
+    buf))
+
 (defun org-task-report ()
   "Build a per-day report for the entry under the cursor.
 Finds every same-titled entry in the current buffer and renders each as a
-dated Org section showing its note content and the time clocked that day."
+dated block showing its note content and the time clocked that day, in the
+presentation named by `org-task-report-presentation'."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Not in an Org buffer"))
@@ -216,17 +373,25 @@ dated Org section showing its note content and the time clocked that day."
       (org-back-to-heading t)
       (setq title (org-task-report--title-at-point)
             rows (org-task-report--collect title)))
-    (let ((buf (get-buffer-create org-task-report-buffer-name)))
-      (with-current-buffer buf
-        (erase-buffer)
-        (org-task-report--render title rows)
-        (org-mode)
-        (goto-char (point-min)))
-      (pop-to-buffer buf))))
+    (pop-to-buffer (org-task-report--render-into-buffer title rows))))
+
+(defun org-task-report-toggle-presentation ()
+  "Switch `org-task-report-presentation' between `org' and `dashboard'.
+An existing report is re-rendered in place from its stored rows, so the
+source buffer is not rescanned and the report need not still be reachable."
+  (interactive)
+  (setq org-task-report-presentation
+        (if (eq org-task-report-presentation 'dashboard) 'org 'dashboard))
+  (let* ((buf (get-buffer org-task-report-buffer-name))
+         (data (and buf (buffer-local-value 'org-task-report--data buf))))
+    (if data
+        (pop-to-buffer (org-task-report--render-into-buffer (car data) (cdr data)))
+      (message "Task report presentation: %s" org-task-report-presentation))))
 
 ;;;###autoload
 (with-eval-after-load 'org
-  (define-key org-mode-map (kbd "C-c t r") #'org-task-report))
+  (define-key org-mode-map (kbd "C-c t r") #'org-task-report)
+  (define-key org-mode-map (kbd "C-c t t") #'org-task-report-toggle-presentation))
 
 (provide 'org-task-report)
 

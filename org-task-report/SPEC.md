@@ -10,13 +10,18 @@ You log the same recurring task across many days as separate org headings
 package collects them and answers: *what did I do on this task, on which day,
 and for how long?*
 
-## Command
+## Commands
 
 `M-x org-task-report`, bound to `C-c t r` in every Org buffer.
 
 Run it with point anywhere inside an org entry. It reads that entry's title,
-finds all matching entries, and opens the `*Org Task Report*` report buffer (an
-Org-mode buffer).
+finds all matching entries, and opens the `*Org Task Report*` report buffer.
+
+`M-x org-task-report-toggle-presentation`, bound to `C-c t t` in every Org
+buffer and to `t` inside a dashboard-presented report. It flips
+`org-task-report-presentation` and re-renders the open report from its stored
+rows — the source buffer is not rescanned, so the report keeps working even if
+the source is no longer reachable.
 
 ## Matching rules
 
@@ -47,9 +52,14 @@ For each matched entry the report captures:
 
 ## Report layout
 
-The report is a plain **Org-mode buffer**. Rows are sorted by date
-(ascending; clockless rows sink to the end); each date is an Org heading whose
-text is a `file:` link back to the source entry.
+Rows are sorted by date (ascending; clockless rows sink to the end) in both
+presentations. `org-task-report-presentation` picks the rendering; both are
+built from the same collected rows, so switching changes only the display.
+
+### `org` (default)
+
+A plain **Org-mode buffer**. Each date is an Org heading whose text is a
+`file:` link back to the source entry.
 
 ```org
 #+TITLE: Task Title
@@ -71,6 +81,35 @@ even when several share a title. The line number is a snapshot taken when the
 report is built; editing the source file afterwards may drift it. Visit a link
 with `RET` or `C-c C-o`. When the source buffer has no file (e.g. a scratch
 buffer), the date is rendered as plain text with no link.
+
+### `dashboard`
+
+A **read-only rendered buffer** (`special-mode`) in the style of the org-focus
+dashboard: a summary block, then one dated block per entry. The date is a
+clickable button carrying the same file/line target as the Org link (plain
+text when the source has no file), followed by the duration and a bar scaled
+to the longest entry in the report.
+
+```
+Org Task Report (Task Title)
+
+Summary
+Entries:           3
+Days:              2
+Total clocked:     3h 30m
+Average per day:   1h 45m
+
+Entries (3)
+
+2026-05-13       2h       ████████████████
+  First day of work.
+
+2026-05-14       1h 30m   ████████████
+  Second day of work.
+
+(no clock info)  0m
+  (no notes)
+```
 
 ## Edge cases (current behaviour)
 
