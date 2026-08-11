@@ -16,7 +16,7 @@
   :group 'qjira
   :type '(repeat string))
 
-(defcustom qjira-retry-timeouts '(2 5 10)
+(defcustom qjira-retry-timeouts '(1 2 2)
   "Per-attempt timeouts, in seconds, used when fetching a JIRA issue.
 The number of elements determines the number of attempts; each entry
 bounds one attempt.  A failed attempt (timeout or error) falls back to
